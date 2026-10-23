@@ -12,13 +12,15 @@ add_library(bimg STATIC
     ${BIMG_DIR}/src/image_decode.cpp
     ${BIMG_DIR}/src/image_decode_wic.cpp
 )
-target_include_directories(bimg PUBLIC ${BIMG_DIR}/include PRIVATE ${BIMG_DIR}/3rdparty)
-# Runtime examples use DDS/KTX/PVR containers and NanoVG's PNG/JPEG images.
+target_include_directories(bimg PUBLIC ${BIMG_DIR}/include PRIVATE
+    ${BIMG_DIR}/3rdparty ${BIMG_DIR}/3rdparty/tinyexr/deps)
+# Runtime images include NanoVG's PNG/JPEG files and sky2's EXR heightmap.
 target_compile_definitions(bimg PRIVATE
     BIMG_CONFIG_DECODE_ASTC=0
     BIMG_CONFIG_PARSE_ENABLE=0
     BIMG_CONFIG_PARSE_PNG=1
     BIMG_CONFIG_PARSE_JPEG=1
+    BIMG_CONFIG_PARSE_EXR=1
 )
 target_compile_options(bimg PRIVATE -fno-exceptions -fno-rtti)
 target_link_libraries(bimg PUBLIC bx)
