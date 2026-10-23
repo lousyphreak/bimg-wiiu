@@ -7,8 +7,17 @@ if(NOT TARGET bx)
     add_subdirectory(${BX_DIR}/scripts/wiiu ${CMAKE_CURRENT_BINARY_DIR}/bx)
 endif()
 
-add_library(bimg STATIC ${BIMG_DIR}/src/image.cpp)
-target_include_directories(bimg PUBLIC ${BIMG_DIR}/include)
-target_compile_definitions(bimg PRIVATE BIMG_CONFIG_DECODE_ASTC=0)
+add_library(bimg STATIC
+    ${BIMG_DIR}/src/image.cpp
+    ${BIMG_DIR}/src/image_decode.cpp
+)
+target_include_directories(bimg PUBLIC ${BIMG_DIR}/include PRIVATE ${BIMG_DIR}/3rdparty)
+# Runtime examples use DDS/KTX/PVR containers and NanoVG's PNG/JPEG images.
+target_compile_definitions(bimg PRIVATE
+    BIMG_CONFIG_DECODE_ASTC=0
+    BIMG_CONFIG_PARSE_ENABLE=0
+    BIMG_CONFIG_PARSE_PNG=1
+    BIMG_CONFIG_PARSE_JPEG=1
+)
 target_compile_options(bimg PRIVATE -fno-exceptions -fno-rtti)
 target_link_libraries(bimg PUBLIC bx)
