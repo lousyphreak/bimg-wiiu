@@ -10,6 +10,7 @@ endif()
 add_library(bimg STATIC
     ${BIMG_DIR}/src/image.cpp
     ${BIMG_DIR}/src/image_decode.cpp
+    ${BIMG_DIR}/src/image_decode_wic.cpp
 )
 target_include_directories(bimg PUBLIC ${BIMG_DIR}/include PRIVATE ${BIMG_DIR}/3rdparty)
 # Runtime examples use DDS/KTX/PVR containers and NanoVG's PNG/JPEG images.
