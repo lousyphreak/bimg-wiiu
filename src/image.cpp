@@ -1482,7 +1482,11 @@ namespace bimg
 		bx::MemoryReader reader(_src, _size);
 
 		uint32_t magic;
+#if BX_PLATFORM_WIIU
+		bx::readHE(&reader, magic, true, bx::ErrorIgnore{});
+#else
 		bx::read(&reader, magic, bx::ErrorIgnore{});
+#endif // BX_PLATFORM_WIIU
 
 		ImageContainer imageContainer;
 		if (magicT != magic)
@@ -4103,7 +4107,11 @@ namespace bimg
 		int32_t total = 0;
 
 		uint32_t headerSize;
+#if BX_PLATFORM_WIIU
+		total += bx::readHE(_reader, headerSize, true, _err);
+#else
 		total += bx::read(_reader, headerSize, _err);
+#endif // BX_PLATFORM_WIIU
 
 		if (!_err->isOk()
 		||  headerSize < DDS_HEADER_SIZE)
@@ -4113,7 +4121,11 @@ namespace bimg
 		}
 
 		uint32_t flags;
+#if BX_PLATFORM_WIIU
+		total += bx::readHE(_reader, flags, true, _err);
+#else
 		total += bx::read(_reader, flags, _err);
+#endif // BX_PLATFORM_WIIU
 
 		if (!_err->isOk() )
 		{
@@ -4127,6 +4139,21 @@ namespace bimg
 		}
 
 		uint32_t height;
+#if BX_PLATFORM_WIIU
+		total += bx::readHE(_reader, height, true, _err);
+
+		uint32_t width;
+		total += bx::readHE(_reader, width, true, _err);
+
+		uint32_t pitch;
+		total += bx::readHE(_reader, pitch, true, _err);
+
+		uint32_t depth;
+		total += bx::readHE(_reader, depth, true, _err);
+
+		uint32_t mips;
+		total += bx::readHE(_reader, mips, true, _err);
+#else
 		total += bx::read(_reader, height, _err);
 
 		uint32_t width;
@@ -4140,11 +4167,36 @@ namespace bimg
 
 		uint32_t mips;
 		total += bx::read(_reader, mips, _err);
+#endif // BX_PLATFORM_WIIU
 
 		bx::skip(_reader, 44); // reserved
 		total += 44;
 
 		uint32_t pixelFormatSize;
+#if BX_PLATFORM_WIIU
+		total += bx::readHE(_reader, pixelFormatSize, true, _err);
+
+		uint32_t pixelFlags;
+		total += bx::readHE(_reader, pixelFlags, true, _err);
+
+		uint32_t fourcc;
+		total += bx::readHE(_reader, fourcc, true, _err);
+
+		uint32_t bitCount;
+		total += bx::readHE(_reader, bitCount, true, _err);
+
+		uint32_t bitmask[4];
+		for (uint32_t& mask : bitmask)
+		{
+			total += bx::readHE(_reader, mask, true, _err);
+		}
+
+		uint32_t caps[4];
+		for (uint32_t& cap : caps)
+		{
+			total += bx::readHE(_reader, cap, true, _err);
+		}
+#else
 		total += bx::read(_reader, pixelFormatSize, _err);
 
 		uint32_t pixelFlags;
@@ -4161,6 +4213,7 @@ namespace bimg
 
 		uint32_t caps[4];
 		total += bx::read(_reader, caps, _err);
+#endif // BX_PLATFORM_WIIU
 
 		bx::skip(_reader, 4);
 		total += 4; // reserved
@@ -4176,6 +4229,20 @@ namespace bimg
 		if (DDPF_FOURCC == (pixelFlags & DDPF_FOURCC)
 		&&  DDS_DX10    == fourcc)
 		{
+#if BX_PLATFORM_WIIU
+			total += bx::readHE(_reader, dxgiFormat, true, _err);
+
+			uint32_t dims;
+			total += bx::readHE(_reader, dims, true, _err);
+
+			uint32_t miscFlags;
+			total += bx::readHE(_reader, miscFlags, true, _err);
+
+			total += bx::readHE(_reader, arraySize, true, _err);
+
+			uint32_t miscFlags2;
+			total += bx::readHE(_reader, miscFlags2, true, _err);
+#else
 			total += bx::read(_reader, dxgiFormat, _err);
 
 			uint32_t dims;
@@ -4188,6 +4255,7 @@ namespace bimg
 
 			uint32_t miscFlags2;
 			total += bx::read(_reader, miscFlags2, _err);
+#endif // BX_PLATFORM_WIIU
 
 			volume = DDS_DX10_DIMENSION_TEXTURE3D == dims;
 		}
@@ -4594,7 +4662,11 @@ namespace bimg
 		}
 
 		uint32_t endianness;
+#if BX_PLATFORM_WIIU
+		bx::readHE(_reader, endianness, true, _err);
+#else
 		bx::read(_reader, endianness, _err);
+#endif // BX_PLATFORM_WIIU
 
 		if (0x04030201 != endianness)
 		{
@@ -4603,6 +4675,42 @@ namespace bimg
 		}
 
 		uint32_t glType;
+#if BX_PLATFORM_WIIU
+		bx::readHE(_reader, glType, true, _err);
+
+		uint32_t glTypeSize;
+		bx::readHE(_reader, glTypeSize, true, _err);
+
+		uint32_t glFormat;
+		bx::readHE(_reader, glFormat, true, _err);
+
+		uint32_t glInternalFormat;
+		bx::readHE(_reader, glInternalFormat, true, _err);
+
+		uint32_t glBaseInternalFormat;
+		bx::readHE(_reader, glBaseInternalFormat, true, _err);
+
+		uint32_t width;
+		bx::readHE(_reader, width, true, _err);
+
+		uint32_t height;
+		bx::readHE(_reader, height, true, _err);
+
+		uint32_t depth;
+		bx::readHE(_reader, depth, true, _err);
+
+		uint32_t numberOfArrayElements;
+		bx::readHE(_reader, numberOfArrayElements, true, _err);
+
+		uint32_t numFaces;
+		bx::readHE(_reader, numFaces, true, _err);
+
+		uint32_t numMips;
+		bx::readHE(_reader, numMips, true, _err);
+
+		uint32_t metaDataSize;
+		bx::readHE(_reader, metaDataSize, true, _err);
+#else
 		bx::read(_reader, glType, _err);
 
 		uint32_t glTypeSize;
@@ -4637,6 +4745,7 @@ namespace bimg
 
 		uint32_t metaDataSize;
 		bx::read(_reader, metaDataSize, _err);
+#endif // BX_PLATFORM_WIIU
 
 		if (!_err->isOk() )
 		{
@@ -5028,6 +5137,51 @@ namespace bimg
 		bx::MemoryReader reader(src + 12, _size - 12);
 
 		uint32_t vkFormat;
+#if BX_PLATFORM_WIIU
+		bx::readHE(&reader, vkFormat, true, _err);
+
+		uint32_t typeSize;
+		bx::readHE(&reader, typeSize, true, _err);
+
+		uint32_t pixelWidth;
+		bx::readHE(&reader, pixelWidth, true, _err);
+
+		uint32_t pixelHeight;
+		bx::readHE(&reader, pixelHeight, true, _err);
+
+		uint32_t pixelDepth;
+		bx::readHE(&reader, pixelDepth, true, _err);
+
+		uint32_t layerCount;
+		bx::readHE(&reader, layerCount, true, _err);
+
+		uint32_t faceCount;
+		bx::readHE(&reader, faceCount, true, _err);
+
+		uint32_t levelCount;
+		bx::readHE(&reader, levelCount, true, _err);
+
+		uint32_t supercompressionScheme;
+		bx::readHE(&reader, supercompressionScheme, true, _err);
+
+		uint32_t dfdByteOffset;
+		bx::readHE(&reader, dfdByteOffset, true, _err);
+
+		uint32_t dfdByteLength;
+		bx::readHE(&reader, dfdByteLength, true, _err);
+
+		uint32_t kvdByteOffset;
+		bx::readHE(&reader, kvdByteOffset, true, _err);
+
+		uint32_t kvdByteLength;
+		bx::readHE(&reader, kvdByteLength, true, _err);
+
+		uint64_t sgdByteOffset;
+		bx::readHE(&reader, sgdByteOffset, true, _err);
+
+		uint64_t sgdByteLength;
+		bx::readHE(&reader, sgdByteLength, true, _err);
+#else
 		bx::read(&reader, vkFormat, _err);
 
 		uint32_t typeSize;
@@ -5071,6 +5225,7 @@ namespace bimg
 
 		uint64_t sgdByteLength;
 		bx::read(&reader, sgdByteLength, _err);
+#endif // BX_PLATFORM_WIIU
 
 		BX_UNUSED(typeSize, dfdByteOffset, dfdByteLength, kvdByteOffset, kvdByteLength, sgdByteOffset, sgdByteLength);
 
@@ -5159,9 +5314,15 @@ namespace bimg
 
 		for (uint32_t ii = 0; ii < numMips; ++ii)
 		{
+#if BX_PLATFORM_WIIU
+			bx::readHE(&reader, levels[ii].byteOffset, true, _err);
+			bx::readHE(&reader, levels[ii].byteLength, true, _err);
+			bx::readHE(&reader, levels[ii].uncompressedByteLength, true, _err);
+#else
 			bx::read(&reader, levels[ii].byteOffset,             _err);
 			bx::read(&reader, levels[ii].byteLength,             _err);
 			bx::read(&reader, levels[ii].uncompressedByteLength, _err);
+#endif // BX_PLATFORM_WIIU
 		}
 
 		if (!_err->isOk() )
@@ -5881,6 +6042,39 @@ namespace bimg
 		BX_ERROR_SCOPE(_err);
 
 		uint32_t flags;
+#if BX_PLATFORM_WIIU
+		bx::readHE(_reader, flags, true, _err);
+
+		uint64_t pixelFormat;
+		bx::readHE(_reader, pixelFormat, true, _err);
+
+		uint32_t colorSpace;
+		bx::readHE(_reader, colorSpace, true, _err); // 0 - linearRGB, 1 - sRGB
+
+		uint32_t channelType;
+		bx::readHE(_reader, channelType, true, _err);
+
+		uint32_t height;
+		bx::readHE(_reader, height, true, _err);
+
+		uint32_t width;
+		bx::readHE(_reader, width, true, _err);
+
+		uint32_t depth;
+		bx::readHE(_reader, depth, true, _err);
+
+		uint32_t numSurfaces;
+		bx::readHE(_reader, numSurfaces, true, _err);
+
+		uint32_t numFaces;
+		bx::readHE(_reader, numFaces, true, _err);
+
+		uint32_t numMips;
+		bx::readHE(_reader, numMips, true, _err);
+
+		uint32_t metaDataSize;
+		bx::readHE(_reader, metaDataSize, true, _err);
+#else
 		bx::read(_reader, flags, _err);
 
 		uint64_t pixelFormat;
@@ -5912,6 +6106,7 @@ namespace bimg
 
 		uint32_t metaDataSize;
 		bx::read(_reader, metaDataSize, _err);
+#endif // BX_PLATFORM_WIIU
 
 		if (!_err->isOk() )
 		{
@@ -5968,6 +6163,17 @@ namespace bimg
 		uint32_t magic;
 		bx::read(_reader, magic, _err);
 
+#if BX_PLATFORM_WIIU
+		if (DDS_MAGIC == bx::toLittleEndian(magic) )
+		{
+			return imageParseDds(_imageContainer, _reader, _err);
+		}
+		else if (KTX_MAGIC == bx::toLittleEndian(magic) )
+		{
+			return imageParseKtx(_imageContainer, _reader, _err);
+		}
+		else if (PVR3_MAGIC == bx::toLittleEndian(magic) )
+#else
 		if (DDS_MAGIC == magic)
 		{
 			return imageParseDds(_imageContainer, _reader, _err);
@@ -5977,6 +6183,7 @@ namespace bimg
 			return imageParseKtx(_imageContainer, _reader, _err);
 		}
 		else if (PVR3_MAGIC == magic)
+#endif // BX_PLATFORM_WIIU
 		{
 			return imageParsePvr3(_imageContainer, _reader, _err);
 		}
@@ -6922,7 +7129,11 @@ namespace bimg
 					}
 
 					const uint32_t size = _imageContainer.m_numLayers == 1 && _imageContainer.m_cubeMap ? mipSize : mipSize * numSides;
+#if BX_PLATFORM_WIIU
+					uint32_t imageSize  = bx::toLittleEndian(bx::loadUnaligned<uint32_t>(&data[offset]) );
+#else
 					uint32_t imageSize  = *(const uint32_t*)&data[offset];
+#endif // BX_PLATFORM_WIIU
 					BX_ASSERT(size == imageSize, "KTX: Image size mismatch %d (expected %d).", size, imageSize);
 					BX_UNUSED(size, imageSize);
 
