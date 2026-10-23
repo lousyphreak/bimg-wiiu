@@ -424,15 +424,26 @@ namespace bimg
 	BX_NO_INLINE void imageSolid(void* _dst, uint32_t _width, uint32_t _height, uint32_t _solid)
 	{
 		uint32_t* dst = (uint32_t*)_dst;
+#if BX_PLATFORM_WIIU
+		const uint32_t solid = bx::toLittleEndian(_solid);
+		for (uint32_t ii = 0, num = _width*_height; ii < num; ++ii)
+		{
+			*dst++ = solid;
+#else
 		for (uint32_t ii = 0, num = _width*_height; ii < num; ++ii)
 		{
 			*dst++ = _solid;
+#endif // BX_PLATFORM_WIIU
 		}
 	}
 
 	BX_NO_INLINE void imageCheckerboard(void* _dst, uint32_t _width, uint32_t _height, uint32_t _step, uint32_t _0, uint32_t _1)
 	{
 		uint32_t* dst = (uint32_t*)_dst;
+#if BX_PLATFORM_WIIU
+		_0 = bx::toLittleEndian(_0);
+		_1 = bx::toLittleEndian(_1);
+#endif // BX_PLATFORM_WIIU
 		for (uint32_t yy = 0; yy < _height; ++yy)
 		{
 			for (uint32_t xx = 0; xx < _width; ++xx)
@@ -592,10 +603,17 @@ namespace bimg
 				const uint8_t* rgba = src;
 				for (uint32_t xx = 0; xx < dstWidth; ++xx, rgba += 8, dst += 4)
 				{
+#if BX_PLATFORM_WIIU
+					const simd128_t abgr0  = simd128_splat(toLittleEndian(loadUnaligned<uint32_t>(rgba) ) );
+					const simd128_t abgr1  = simd128_splat(toLittleEndian(loadUnaligned<uint32_t>(rgba+4) ) );
+					const simd128_t abgr2  = simd128_splat(toLittleEndian(loadUnaligned<uint32_t>(rgba+_srcPitch) ) );
+					const simd128_t abgr3  = simd128_splat(toLittleEndian(loadUnaligned<uint32_t>(rgba+_srcPitch+4) ) );
+#else
 					const simd128_t abgr0  = simd128_splat(*(const uint32_t*)(rgba) );
 					const simd128_t abgr1  = simd128_splat(*(const uint32_t*)(rgba+4) );
 					const simd128_t abgr2  = simd128_splat(*(const uint32_t*)(rgba+_srcPitch) );
 					const simd128_t abgr3  = simd128_splat(*(const uint32_t*)(rgba+_srcPitch+4) );
+#endif // BX_PLATFORM_WIIU
 
 					const simd128_t abgr0m = simd_and(abgr0, umask);
 					const simd128_t abgr1m = simd_and(abgr1, umask);
@@ -639,7 +657,13 @@ namespace bimg
 					const simd128_t tmp1   = simd_i32_add(yyyy, yyyy);
 					const simd128_t result = simd_or(tmp0, tmp1);
 
+#if BX_PLATFORM_WIIU
+					uint32_t abgr;
+					simd_x32_st1(&abgr, result);
+					storeUnaligned(dst, toLittleEndian(abgr) );
+#else
 					simd_x32_st1(dst, result);
+#endif // BX_PLATFORM_WIIU
 				}
 			}
 		}
@@ -1105,8 +1129,13 @@ namespace bimg
 
 		using namespace bx;
 
+#if BX_PLATFORM_WIIU
+		const simd128_t mf0f0 = simd128_splat(toLittleEndian(uint32_t(0xff00ff00) ) );
+		const simd128_t m0f0f = simd128_splat(toLittleEndian(uint32_t(0x00ff00ff) ) );
+#else
 		const simd128_t mf0f0 = simd128_splat(uint32_t(0xff00ff00) );
 		const simd128_t m0f0f = simd128_splat(uint32_t(0x00ff00ff) );
+#endif // BX_PLATFORM_WIIU
 		const uint32_t  width = _width/4;
 
 		const uint8_t* srcData = (uint8_t*) _src;
@@ -1935,6 +1964,9 @@ namespace bimg
 			const uint16_t shift = m_bitPos & 7;
 			uint32_t data = 0;
 			bx::memCopy(&data, &m_data[pos], bx::min(4, 16-pos) );
+#if BX_PLATFORM_WIIU
+			data = bx::toLittleEndian(data);
+#endif // BX_PLATFORM_WIIU
 			m_bitPos += _numBits;
 			return uint16_t( (data >> shift) & ( (1 << _numBits)-1) );
 		}
@@ -1946,6 +1978,9 @@ namespace bimg
 			uint16_t pos  = bitPos / 8;
 			uint32_t data = 0;
 			bx::memCopy(&data, &m_data[pos], bx::min(4, 16-pos) );
+#if BX_PLATFORM_WIIU
+			data = bx::toLittleEndian(data);
+#endif // BX_PLATFORM_WIIU
 			return uint8_t( (data >> shift) & ( (1 << _numBits)-1) );
 		}
 
@@ -6970,7 +7005,11 @@ namespace bimg
 			const uint8_t* rgba = src;
 			for (uint32_t xx = 0; xx < dstWidth; ++xx, rgba += 4, dst += 4)
 			{
+#if BX_PLATFORM_WIIU
+				const simd128_t abgr0  = simd128_splat(toLittleEndian(loadUnaligned<uint32_t>(rgba) ) );
+#else
 				const simd128_t abgr0  = simd128_splat(*(const uint32_t*)(rgba) );
+#endif // BX_PLATFORM_WIIU
 				const simd128_t abgr0m = simd_and(abgr0, umask);
 				const simd128_t abgr0x = simd_xor(abgr0m, wflip);
 				const simd128_t abgr0f = simd_i32_itof(abgr0x);
