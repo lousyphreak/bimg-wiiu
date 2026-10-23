@@ -2948,7 +2948,9 @@ namespace bimg
 			_dst[ii+0] = colors[idx+0];
 			_dst[ii+1] = colors[idx+1];
 			_dst[ii+2] = colors[idx+2];
+#if !BX_PLATFORM_WIIU
 			_dst[ii+3] = colors[idx+3];
+#endif // BX_PLATFORM_WIIU
 		}
 	}
 
@@ -7019,6 +7021,9 @@ namespace bimg
 				{
 					decodeBlockATC(temp, src);
 					src += 8;
+#if BX_PLATFORM_WIIU
+					for (uint32_t ii = 0; ii < 16; ++ii) temp[ii*4+3] = 255;
+#endif // BX_PLATFORM_WIIU
 
 					uint8_t* block = &dst[(yy*_dstPitch+xx*4)*4];
 					bx::memCopy(&block[0*_dstPitch], &temp[ 0], 16);
