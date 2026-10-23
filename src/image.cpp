@@ -7709,14 +7709,24 @@ namespace bimg
 		total += bx::write(&writerC, "IHDR", _err);
 		total += bx::write(&writerC, bx::toBigEndian(_width),  _err);
 		total += bx::write(&writerC, bx::toBigEndian(_height), _err);
+#if BX_PLATFORM_WIIU
+		total += bx::write(&writerC, uint8_t(8), _err);
+		total += bx::write(&writerC, uint8_t(grayscale ? 0 : 6), _err);
+#else
 		total += bx::write(&writerC, "\x08\x06", _err);
+#endif // BX_PLATFORM_WIIU
 		total += bx::writeRep(&writerC, 0, 3, _err);
 		total += bx::write(_writer, bx::toBigEndian(writerC.end() ), _err);
 
 		const uint32_t bpp    = grayscale ? 8 : 32;
 		const uint32_t stride = _width*bpp/8;
+#if BX_PLATFORM_WIIU
+		const uint16_t zlen   = uint16_t(stride + 1);
+		const uint16_t zlenC  = uint16_t(~zlen);
+#else
 		const uint16_t zlen   = bx::toLittleEndian<uint16_t>(uint16_t(stride + 1) );
 		const uint16_t zlenC  = bx::toLittleEndian<uint16_t>(~zlen);
+#endif // BX_PLATFORM_WIIU
 
 		total += bx::write(_writer, bx::toBigEndian<uint32_t>(_height*(stride+6)+6), _err);
 
@@ -7737,8 +7747,13 @@ namespace bimg
 		for (uint32_t ii = 0; ii < _height && _err->isOk(); ++ii)
 		{
 			total += bx::write(&writerC, uint8_t(ii == _height-1 ? 1 : 0), _err);
+#if BX_PLATFORM_WIIU
+			total += bx::writeLE(&writerC, zlen,  _err);
+			total += bx::writeLE(&writerC, zlenC, _err);
+#else
 			total += bx::write(&writerC, zlen,  _err);
 			total += bx::write(&writerC, zlenC, _err);
+#endif // BX_PLATFORM_WIIU
 
 			total += bx::write(&writerA, uint8_t(0), _err);
 
