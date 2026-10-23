@@ -287,6 +287,79 @@ namespace bimg
 		return s_imageBlockInfo[_format];
 	}
 
+	uint8_t getPixelWordSize(TextureFormat::Enum _format)
+	{
+		if (isCompressed(_format) )
+		{
+			return 0;
+		}
+
+		const ImageBlockInfo& info = getBlockInfo(_format);
+		if (0 != info.depthBits)
+		{
+			// D32FS8 contains two 32-bit words, not one 64-bit word.
+			return 32 == info.depthBits ? 4 : info.blockSize;
+		}
+
+		const uint8_t bits = bx::max(info.rBits, info.gBits, info.bBits, info.aBits);
+		return 8 == bits || 16 == bits || 32 == bits ? bits / 8 : info.blockSize;
+	}
+
+#if BX_PLATFORM_WIIU
+	static void imageEndianSwap(void* _data, uint32_t _size, TextureFormat::Enum _format)
+	{
+		const uint8_t wordSize = getPixelWordSize(_format);
+		if (wordSize <= 1)
+		{
+			return;
+		}
+
+		uint8_t* data = (uint8_t*)_data;
+		for (uint32_t offset = 0; offset < _size; offset += wordSize)
+		{
+			for (uint8_t ii = 0; ii < wordSize / 2; ++ii)
+			{
+				bx::swap(data[offset + ii], data[offset + wordSize - 1 - ii]);
+			}
+		}
+	}
+
+	static bool imageIsLittleEndian(const ImageContainer& _imageContainer, const void* _data)
+	{
+		if (NULL != _imageContainer.m_data)
+		{
+			return BX_CPU_ENDIAN_LITTLE;
+		}
+
+		// Raw container views retain file order; only KTX1 can declare big endian.
+		return !_imageContainer.m_ktx
+			|| 0x04030201 == bx::toLittleEndian(bx::loadUnaligned<uint32_t>((const uint8_t*)_data + 12) );
+	}
+
+	static int32_t imageWritePixelsLE(bx::WriterI* _writer, TextureFormat::Enum _format, const void* _data, uint32_t _size, bool _littleEndian, bx::Error* _err)
+	{
+		if (_littleEndian || getPixelWordSize(_format) <= 1)
+		{
+			return bx::write(_writer, _data, _size, _err);
+		}
+
+		// Divisible by all supported word sizes, including three-byte depth.
+		uint8_t buffer[4092];
+		const uint8_t* data = (const uint8_t*)_data;
+		int32_t total = 0;
+		for (uint32_t offset = 0; offset < _size && _err->isOk(); )
+		{
+			const uint32_t size = bx::min<uint32_t>(sizeof(buffer), _size - offset);
+			bx::memCopy(buffer, data + offset, size);
+			imageEndianSwap(buffer, size, _format);
+			total += bx::write(_writer, buffer, size, _err);
+			offset += size;
+		}
+
+		return total;
+	}
+
+#endif // BX_PLATFORM_WIIU
 	uint8_t getBlockSize(TextureFormat::Enum _format)
 	{
 		return s_imageBlockInfo[_format].blockSize;
@@ -1176,6 +1249,32 @@ namespace bimg
 	{
 		const uint32_t dstPitch = _width*_bpp/8;
 		imageCopy(_dst, _height, _srcPitch, _depth, _src, dstPitch);
+#if BX_PLATFORM_WIIU
+	}
+
+	// bx's 24-bit depth packers define little-endian byte layouts. Adapt them
+	// here so bimg's CPU pack/unpack API agrees with native container pixels.
+	template<TextureFormat::Enum formatT, PackFn packFnT>
+	static void packNativeDepth(void* _dst, const float* _src)
+	{
+		packFnT(_dst, _src);
+		if (BX_CPU_ENDIAN_BIG)
+		{
+			imageEndianSwap(_dst, getBlockSize(formatT), formatT);
+		}
+	}
+
+	template<TextureFormat::Enum formatT, UnpackFn unpackFnT>
+	static void unpackNativeDepth(float* _dst, const void* _src)
+	{
+		uint8_t data[4];
+		bx::memCopy(data, _src, getBlockSize(formatT) );
+		if (BX_CPU_ENDIAN_BIG)
+		{
+			imageEndianSwap(data, getBlockSize(formatT), formatT);
+		}
+		unpackFnT(_dst, data);
+#endif // BX_PLATFORM_WIIU
 	}
 
 	struct PackUnpack
@@ -1283,8 +1382,13 @@ namespace bimg
 		{ bx::packRG11B10F,   bx::unpackRG11B10F   }, // RG11B10F
 		{ NULL,               NULL                 }, // UnknownDepth
 		{ bx::packR16,        bx::unpackR16        }, // D16
+#if BX_PLATFORM_WIIU
+		{ packNativeDepth<TextureFormat::D24, bx::packR24>, unpackNativeDepth<TextureFormat::D24, bx::unpackR24> }, // D24
+		{ packNativeDepth<TextureFormat::D24S8, bx::packR24G8>, unpackNativeDepth<TextureFormat::D24S8, bx::unpackR24G8> }, // D24S8
+#else
 		{ bx::packR24,        bx::unpackR24        }, // D24
 		{ bx::packR24G8,      bx::unpackR24G8      }, // D24S8
+#endif // BX_PLATFORM_WIIU
 		{ NULL,               NULL                 }, // D32
 		{ bx::packR16F,       bx::unpackR16F       }, // D16F
 		{ NULL,               NULL                 }, // D24F
@@ -1586,7 +1690,16 @@ namespace bimg
 					if (imageGetRawData(imageContainer, side, lod, _src, _size, mip) )
 					{
 						uint8_t* dstData = const_cast<uint8_t*>(dstMip.m_data);
+#if BX_PLATFORM_WIIU
+						const uint32_t size = bx::min(mip.m_size, dstMip.m_size);
+						bx::memCopy(dstData, mip.m_data, size);
+						if (imageIsLittleEndian(imageContainer, _src) != bool(BX_CPU_ENDIAN_LITTLE) )
+						{
+							imageEndianSwap(dstData, size, imageContainer.m_format);
+						}
+#else
 						bx::memCopy(dstData, mip.m_data, bx::min(mip.m_size, dstMip.m_size) );
+#endif // BX_PLATFORM_WIIU
 					}
 				}
 			}
@@ -4699,9 +4812,52 @@ namespace bimg
 		uint32_t endianness;
 #if BX_PLATFORM_WIIU
 		bx::readHE(_reader, endianness, true, _err);
+
+		if (0x04030201 != endianness && 0x01020304 != endianness)
+		{
+			BX_ERROR_SET(_err, BIMG_ERROR, "KTX: Invalid endianness marker.");
+			return false;
+		}
+
+		const bool littleEndian = 0x04030201 == endianness;
+
+		uint32_t glType;
+		bx::readHE(_reader, glType, littleEndian, _err);
+
+		uint32_t glTypeSize;
+		bx::readHE(_reader, glTypeSize, littleEndian, _err);
+
+		uint32_t glFormat;
+		bx::readHE(_reader, glFormat, littleEndian, _err);
+
+		uint32_t glInternalFormat;
+		bx::readHE(_reader, glInternalFormat, littleEndian, _err);
+
+		uint32_t glBaseInternalFormat;
+		bx::readHE(_reader, glBaseInternalFormat, littleEndian, _err);
+
+		uint32_t width;
+		bx::readHE(_reader, width, littleEndian, _err);
+
+		uint32_t height;
+		bx::readHE(_reader, height, littleEndian, _err);
+
+		uint32_t depth;
+		bx::readHE(_reader, depth, littleEndian, _err);
+
+		uint32_t numberOfArrayElements;
+		bx::readHE(_reader, numberOfArrayElements, littleEndian, _err);
+
+		uint32_t numFaces;
+		bx::readHE(_reader, numFaces, littleEndian, _err);
+
+		uint32_t numMips;
+		bx::readHE(_reader, numMips, littleEndian, _err);
+
+		uint32_t metaDataSize;
+		bx::readHE(_reader, metaDataSize, littleEndian, _err);
 #else
 		bx::read(_reader, endianness, _err);
-#endif // BX_PLATFORM_WIIU
 
 		if (0x04030201 != endianness)
 		{
@@ -4710,42 +4866,6 @@ namespace bimg
 		}
 
 		uint32_t glType;
-#if BX_PLATFORM_WIIU
-		bx::readHE(_reader, glType, true, _err);
-
-		uint32_t glTypeSize;
-		bx::readHE(_reader, glTypeSize, true, _err);
-
-		uint32_t glFormat;
-		bx::readHE(_reader, glFormat, true, _err);
-
-		uint32_t glInternalFormat;
-		bx::readHE(_reader, glInternalFormat, true, _err);
-
-		uint32_t glBaseInternalFormat;
-		bx::readHE(_reader, glBaseInternalFormat, true, _err);
-
-		uint32_t width;
-		bx::readHE(_reader, width, true, _err);
-
-		uint32_t height;
-		bx::readHE(_reader, height, true, _err);
-
-		uint32_t depth;
-		bx::readHE(_reader, depth, true, _err);
-
-		uint32_t numberOfArrayElements;
-		bx::readHE(_reader, numberOfArrayElements, true, _err);
-
-		uint32_t numFaces;
-		bx::readHE(_reader, numFaces, true, _err);
-
-		uint32_t numMips;
-		bx::readHE(_reader, numMips, true, _err);
-
-		uint32_t metaDataSize;
-		bx::readHE(_reader, metaDataSize, true, _err);
-#else
 		bx::read(_reader, glType, _err);
 
 		uint32_t glTypeSize;
@@ -5466,7 +5586,16 @@ namespace bimg
 					if (imageGetRawData(imageContainer, side, lod, _src, _size, mip) )
 					{
 						uint8_t* dstData = const_cast<uint8_t*>(dstMip.m_data);
+#if BX_PLATFORM_WIIU
+						const uint32_t size = bx::min(mip.m_size, dstMip.m_size);
+						bx::memCopy(dstData, mip.m_data, size);
+						if (imageIsLittleEndian(imageContainer, _src) != bool(BX_CPU_ENDIAN_LITTLE) )
+						{
+							imageEndianSwap(dstData, size, imageContainer.m_format);
+						}
+#else
 						bx::memCopy(dstData, mip.m_data, bx::min(mip.m_size, dstMip.m_size) );
+#endif // BX_PLATFORM_WIIU
 					}
 				}
 			}
@@ -5646,12 +5775,21 @@ namespace bimg
 		const uint32_t totalSize = 4 + descriptorBlockSize;
 
 		int32_t total = 0;
+#if BX_PLATFORM_WIIU
+		total += bx::writeLE(_writer, totalSize, _err);
+
+		total += bx::writeLE(_writer, uint16_t(0), _err); // vendorId | (descriptorType lower bits)
+		total += bx::writeLE(_writer, uint16_t(0), _err); // descriptorType upper bits
+		total += bx::writeLE(_writer, uint16_t(2), _err); // versionNumber = KTX 2.0
+		total += bx::writeLE(_writer, descriptorBlockSize, _err);
+#else
 		total += bx::write(_writer, totalSize, _err);
 
 		total += bx::write(_writer, uint16_t(0), _err); // vendorId | (descriptorType lower bits)
 		total += bx::write(_writer, uint16_t(0), _err); // descriptorType upper bits
 		total += bx::write(_writer, uint16_t(2), _err); // versionNumber = KTX 2.0
 		total += bx::write(_writer, descriptorBlockSize, _err);
+#endif // BX_PLATFORM_WIIU
 
 		total += bx::write(_writer, uint8_t(_dfd.m_colorModel), _err);
 		total += bx::write(_writer, uint8_t(KTX2_DF_PRIMARIES_BT709), _err);
@@ -5672,15 +5810,24 @@ namespace bimg
 		for (uint32_t ii = 0; ii < _dfd.m_numSamples; ++ii)
 		{
 			const Ktx2DfdDescriptor::Sample& s = _dfd.m_samples[ii];
+#if BX_PLATFORM_WIIU
+			total += bx::writeLE(_writer, s.m_bitOffset, _err);
+#else
 			total += bx::write(_writer, s.m_bitOffset, _err);
+#endif // BX_PLATFORM_WIIU
 			total += bx::write(_writer, s.m_bitLength, _err);
 			total += bx::write(_writer, uint8_t(s.m_channelType | (s.m_qualifiers & 0xF0) ), _err);
 			total += bx::write(_writer, uint8_t(0), _err); // samplePosition0
 			total += bx::write(_writer, uint8_t(0), _err); // samplePosition1
 			total += bx::write(_writer, uint8_t(0), _err); // samplePosition2
 			total += bx::write(_writer, uint8_t(0), _err); // samplePosition3
+#if BX_PLATFORM_WIIU
+			total += bx::writeLE(_writer, s.m_sampleLower, _err);
+			total += bx::writeLE(_writer, s.m_sampleUpper, _err);
+#else
 			total += bx::write(_writer, s.m_sampleLower, _err);
 			total += bx::write(_writer, s.m_sampleUpper, _err);
+#endif // BX_PLATFORM_WIIU
 		}
 
 		return total;
@@ -5709,7 +5856,9 @@ namespace bimg
 		const uint32_t minBlockX    = blockInfo.minBlockX;
 		const uint32_t minBlockY    = blockInfo.minBlockY;
 		const uint32_t blockSize    = blockInfo.blockSize;
+#if !BX_PLATFORM_WIIU
 		const bool     isCompressed = blockWidth > 1 || blockHeight > 1;
+#endif // BX_PLATFORM_WIIU
 
 		const uint32_t numMips   = bx::max<uint8_t>(_numMips, 1);
 		const uint32_t numLayers = bx::max<uint32_t>(_numLayers, 1);
@@ -5719,6 +5868,9 @@ namespace bimg
 		const Ktx2DfdDescriptor dfd = ktx2DfdFromFormat(_format);
 		const uint32_t dfdTotalSize = ktx2DfdTotalSize(dfd);
 
+#if BX_PLATFORM_WIIU
+		const uint32_t typeSize = bx::max<uint32_t>(1, getPixelWordSize(_format) );
+#else
 		uint32_t typeSize = 1;
 
 		if (!isCompressed)
@@ -5735,6 +5887,7 @@ namespace bimg
 				typeSize = bx::max<uint32_t>(1, blockSize / numChannels);
 			}
 		}
+#endif // BX_PLATFORM_WIIU
 
 		const uint32_t headerAndIndex = KTX2_HEADER_SIZE + KTX2_LEVEL_INDEX_ENTRY_SIZE * numMips;
 		const uint32_t dfdByteOffset = headerAndIndex;
@@ -5784,6 +5937,30 @@ namespace bimg
 
 		total += bx::write(_writer, s_ktx2Identifier, 12, _err);
 
+#if BX_PLATFORM_WIIU
+		total += bx::writeLE(_writer, vkFormat, _err);
+		total += bx::writeLE(_writer, typeSize, _err);
+		total += bx::writeLE(_writer, _width, _err);
+		total += bx::writeLE(_writer, _height, _err);
+		total += bx::writeLE(_writer, _depth, _err); // pixelDepth = 0 for 2D/cube
+		total += bx::writeLE(_writer, _numLayers > 1 ? _numLayers : uint32_t(0), _err); // layerCount = 0 for non-array
+		total += bx::writeLE(_writer, uint32_t(_cubeMap ? 6 : 1), _err); // faceCount
+		total += bx::writeLE(_writer, numMips, _err); // levelCount
+		total += bx::writeLE(_writer, uint32_t(0), _err); // supercompressionScheme = NONE
+
+		total += bx::writeLE(_writer, dfdByteOffset, _err);
+		total += bx::writeLE(_writer, dfdByteLength, _err);
+		total += bx::writeLE(_writer, uint32_t(0), _err); // kvdByteOffset
+		total += bx::writeLE(_writer, uint32_t(0), _err); // kvdByteLength
+		total += bx::writeLE(_writer, uint64_t(0), _err); // sgdByteOffset
+		total += bx::writeLE(_writer, uint64_t(0), _err); // sgdByteLength
+
+		for (uint32_t lod = 0; lod < numMips; ++lod)
+		{
+			total += bx::writeLE(_writer, levels[lod].byteOffset, _err);
+			total += bx::writeLE(_writer, levels[lod].byteLength, _err);
+			total += bx::writeLE(_writer, levels[lod].byteLength, _err); // uncompressedByteLength == byteLength
+#else
 		total += bx::write(_writer, vkFormat, _err);
 		total += bx::write(_writer, typeSize, _err);
 		total += bx::write(_writer, _width, _err);
@@ -5806,6 +5983,7 @@ namespace bimg
 			total += bx::write(_writer, levels[lod].byteOffset, _err);
 			total += bx::write(_writer, levels[lod].byteLength, _err);
 			total += bx::write(_writer, levels[lod].byteLength, _err); // uncompressedByteLength == byteLength
+#endif // BX_PLATFORM_WIIU
 		}
 
 		total += imageWriteKtx2Dfd(_writer, _format, _srgb, dfd, _err);
@@ -5839,7 +6017,11 @@ namespace bimg
 				{
 					const uint32_t side = layer * numFaces + face;
 					const uint64_t srcOffset = side * perSideTotal + offsetInSide;
+#if BX_PLATFORM_WIIU
+					total += imageWritePixelsLE(_writer, _format, src + srcOffset, uint32_t(levels[lod].perFaceSize), BX_CPU_ENDIAN_LITTLE, _err);
+#else
 					total += bx::write(_writer, src + srcOffset, uint32_t(levels[lod].perFaceSize), _err);
+#endif // BX_PLATFORM_WIIU
 				}
 			}
 		}
@@ -5867,10 +6049,14 @@ namespace bimg
 		}
 
 		const ImageBlockInfo& blockInfo = s_imageBlockInfo[format];
+#if BX_PLATFORM_WIIU
+		const uint32_t blockSize    = blockInfo.blockSize;
+#else
 		const uint32_t blockWidth   = blockInfo.blockWidth;
 		const uint32_t blockHeight  = blockInfo.blockHeight;
 		const uint32_t blockSize    = blockInfo.blockSize;
 		const bool     isCompressed = blockWidth > 1 || blockHeight > 1;
+#endif // BX_PLATFORM_WIIU
 
 		const uint32_t numMips   = bx::max<uint8_t>(_imageContainer.m_numMips, 1);
 		const uint32_t numLayers = bx::max<uint32_t>(_imageContainer.m_numLayers, 1);
@@ -5880,6 +6066,9 @@ namespace bimg
 		const Ktx2DfdDescriptor dfd = ktx2DfdFromFormat(format);
 		const uint32_t dfdTotalSize = ktx2DfdTotalSize(dfd);
 
+#if BX_PLATFORM_WIIU
+		const uint32_t typeSize = bx::max<uint32_t>(1, getPixelWordSize(format) );
+#else
 		uint32_t typeSize = 1;
 		if (!isCompressed)
 		{
@@ -5895,6 +6084,7 @@ namespace bimg
 				typeSize = bx::max<uint32_t>(1, blockSize / numChannels);
 			}
 		}
+#endif // BX_PLATFORM_WIIU
 
 		const uint32_t headerAndIndex = KTX2_HEADER_SIZE + KTX2_LEVEL_INDEX_ENTRY_SIZE * numMips;
 		const uint32_t dfdByteOffset = headerAndIndex;
@@ -5934,6 +6124,30 @@ namespace bimg
 
 		total += bx::write(_writer, s_ktx2Identifier, 12, _err);
 
+#if BX_PLATFORM_WIIU
+		total += bx::writeLE(_writer, vkFormat,                                          _err);
+		total += bx::writeLE(_writer, typeSize,                                          _err);
+		total += bx::writeLE(_writer, _imageContainer.m_width,                           _err);
+		total += bx::writeLE(_writer, _imageContainer.m_height,                          _err);
+		total += bx::writeLE(_writer, _imageContainer.m_depth,                           _err);
+		total += bx::writeLE(_writer, _imageContainer.m_numLayers > 1 ? uint32_t(_imageContainer.m_numLayers) : uint32_t(0), _err);
+		total += bx::writeLE(_writer, uint32_t(_imageContainer.m_cubeMap ? 6 : 1),       _err);
+		total += bx::writeLE(_writer, numMips,                                           _err);
+		total += bx::writeLE(_writer, uint32_t(0),                                       _err); // supercompressionScheme = NONE
+
+		total += bx::writeLE(_writer, dfdByteOffset,    _err);
+		total += bx::writeLE(_writer, dfdByteLength,    _err);
+		total += bx::writeLE(_writer, uint32_t(0),      _err);
+		total += bx::writeLE(_writer, uint32_t(0),      _err);
+		total += bx::writeLE(_writer, uint64_t(0),      _err);
+		total += bx::writeLE(_writer, uint64_t(0),      _err);
+
+		for (uint32_t lod = 0; lod < numMips; ++lod)
+		{
+			total += bx::writeLE(_writer, levels[lod].byteOffset, _err);
+			total += bx::writeLE(_writer, levels[lod].byteLength, _err);
+			total += bx::writeLE(_writer, levels[lod].byteLength, _err);
+#else
 		total += bx::write(_writer, vkFormat,                                          _err);
 		total += bx::write(_writer, typeSize,                                          _err);
 		total += bx::write(_writer, _imageContainer.m_width,                           _err);
@@ -5956,6 +6170,7 @@ namespace bimg
 			total += bx::write(_writer, levels[lod].byteOffset, _err);
 			total += bx::write(_writer, levels[lod].byteLength, _err);
 			total += bx::write(_writer, levels[lod].byteLength, _err);
+#endif // BX_PLATFORM_WIIU
 		}
 
 		total += imageWriteKtx2Dfd(_writer, format, _imageContainer.m_srgb, dfd, _err);
@@ -5976,7 +6191,11 @@ namespace bimg
 					ImageMip mip;
 					if (imageGetRawData(_imageContainer, side, uint8_t(lod), _data, _size, mip) )
 					{
+#if BX_PLATFORM_WIIU
+						total += imageWritePixelsLE(_writer, mip.m_format, mip.m_data, mip.m_size, imageIsLittleEndian(_imageContainer, _data), _err);
+#else
 						total += bx::write(_writer, mip.m_data, mip.m_size, _err);
+#endif // BX_PLATFORM_WIIU
 					}
 				}
 			}
@@ -6269,6 +6488,73 @@ namespace bimg
 
 		bx::MemoryReader reader(_data, _size);
 		return imageParse(_imageContainer, &reader, _err);
+	}
+
+	bool imageDecodeSupported(TextureFormat::Enum _format)
+	{
+		switch (_format)
+		{
+		case TextureFormat::BC1:   return BX_ENABLED(BIMG_CONFIG_DECODE_BC1);
+		case TextureFormat::BC2:   return BX_ENABLED(BIMG_CONFIG_DECODE_BC2);
+		case TextureFormat::BC3:   return BX_ENABLED(BIMG_CONFIG_DECODE_BC3);
+		case TextureFormat::BC4:
+		case TextureFormat::BC4S:  return BX_ENABLED(BIMG_CONFIG_DECODE_BC4);
+		case TextureFormat::BC5:
+		case TextureFormat::BC5S:  return BX_ENABLED(BIMG_CONFIG_DECODE_BC5);
+		case TextureFormat::BC6H:
+		case TextureFormat::BC6HU: return BX_ENABLED(BIMG_CONFIG_DECODE_BC6);
+		case TextureFormat::BC7:   return BX_ENABLED(BIMG_CONFIG_DECODE_BC7);
+
+		case TextureFormat::ETC1:
+		case TextureFormat::ETC2:
+			return BX_ENABLED(BIMG_CONFIG_DECODE_ETC1 || BIMG_CONFIG_DECODE_ETC2);
+
+		case TextureFormat::ETC2A:
+		case TextureFormat::ETC2A1:
+		case TextureFormat::EACR11:
+		case TextureFormat::EACR11S:
+		case TextureFormat::EACRG11:
+		case TextureFormat::EACRG11S:
+			return BX_ENABLED(BIMG_CONFIG_DECODE_ETC2);
+
+		case TextureFormat::PTC14:
+		case TextureFormat::PTC14A:
+			return true;
+
+		case TextureFormat::PTC12:
+		case TextureFormat::PTC12A:
+		case TextureFormat::PTC22:
+		case TextureFormat::PTC24:
+			return false; // These paths only generate checkerboards.
+
+		case TextureFormat::ATC:
+			return BX_ENABLED(BIMG_CONFIG_DECODE_ATC);
+
+		case TextureFormat::ATCE:
+			return BX_ENABLED(BIMG_CONFIG_DECODE_ATC && BIMG_CONFIG_DECODE_BC2);
+
+		case TextureFormat::ATCI:
+			return BX_ENABLED(BIMG_CONFIG_DECODE_ATC && (BIMG_CONFIG_DECODE_BC3 || BIMG_CONFIG_DECODE_BC4 || BIMG_CONFIG_DECODE_BC5) );
+
+		case TextureFormat::ASTC4x4:
+		case TextureFormat::ASTC5x4:
+		case TextureFormat::ASTC5x5:
+		case TextureFormat::ASTC6x5:
+		case TextureFormat::ASTC6x6:
+		case TextureFormat::ASTC8x5:
+		case TextureFormat::ASTC8x6:
+		case TextureFormat::ASTC8x8:
+		case TextureFormat::ASTC10x5:
+		case TextureFormat::ASTC10x6:
+		case TextureFormat::ASTC10x8:
+		case TextureFormat::ASTC10x10:
+		case TextureFormat::ASTC12x10:
+		case TextureFormat::ASTC12x12:
+			return BX_ENABLED(BIMG_CONFIG_DECODE_ASTC);
+
+		default:
+			return isValid(_format) && NULL != getUnpack(_format);
+		}
 	}
 
 	void imageDecodeToR8(bx::AllocatorI* _allocator, void* _dst, const void* _src, uint32_t _width, uint32_t _height, uint32_t _depth, uint32_t _dstPitch, TextureFormat::Enum _srcFormat)
@@ -7169,7 +7455,7 @@ namespace bimg
 
 					const uint32_t size = _imageContainer.m_numLayers == 1 && _imageContainer.m_cubeMap ? mipSize : mipSize * numSides;
 #if BX_PLATFORM_WIIU
-					uint32_t imageSize  = bx::toLittleEndian(bx::loadUnaligned<uint32_t>(&data[offset]) );
+					uint32_t imageSize  = bx::toHostEndian(bx::loadUnaligned<uint32_t>(&data[offset]), imageIsLittleEndian(_imageContainer, _data) );
 #else
 					uint32_t imageSize  = *(const uint32_t*)&data[offset];
 #endif // BX_PLATFORM_WIIU
@@ -7719,11 +8005,19 @@ namespace bimg
 		const uint32_t bpp = getBitsPerPixel(_format);
 
 		uint32_t total = 0;
+#if BX_PLATFORM_WIIU
+		total += bx::writeLE(_writer, uint32_t(DDS_MAGIC), _err);
+
+		uint32_t headerStart = total;
+		total += bx::writeLE(_writer, uint32_t(DDS_HEADER_SIZE), _err);
+		total += bx::writeLE(_writer, uint32_t(0
+#else
 		total += bx::write(_writer, uint32_t(DDS_MAGIC), _err);
 
 		uint32_t headerStart = total;
 		total += bx::write(_writer, uint32_t(DDS_HEADER_SIZE), _err);
 		total += bx::write(_writer, uint32_t(0
+#endif // BX_PLATFORM_WIIU
 			| DDSD_HEIGHT
 			| DDSD_WIDTH
 			| DDSD_PIXELFORMAT
@@ -7739,17 +8033,51 @@ namespace bimg
 			: _width*bpp/8
 			;
 
+#if BX_PLATFORM_WIIU
+		total += bx::writeLE(_writer, _height, _err);
+		total += bx::writeLE(_writer, _width, _err);
+		total += bx::writeLE(_writer, pitchOrLinearSize, _err);
+		total += bx::writeLE(_writer, _depth, _err);
+		total += bx::writeLE(_writer, uint32_t(_numMips), _err);
+#else
 		total += bx::write(_writer, _height, _err);
 		total += bx::write(_writer, _width, _err);
 		total += bx::write(_writer, pitchOrLinearSize, _err);
 		total += bx::write(_writer, _depth, _err);
 		total += bx::write(_writer, uint32_t(_numMips), _err);
+#endif // BX_PLATFORM_WIIU
 		total += bx::writeRep(_writer, 0, 44, _err); // reserved1
 
 		if (UINT32_MAX != ddspf)
 		{
 			const TranslateDdsPixelFormat& pf = s_translateDdsPixelFormat[ddspf];
 
+#if BX_PLATFORM_WIIU
+			total += bx::writeLE(_writer, uint32_t(8*sizeof(uint32_t) ), _err); // pixelFormatSize
+			total += bx::writeLE(_writer, pf.m_flags, _err);
+			total += bx::writeLE(_writer, uint32_t(0), _err);
+			total += bx::writeLE(_writer, pf.m_bitCount, _err);
+			for (uint32_t mask : pf.m_bitmask)
+			{
+				total += bx::writeLE(_writer, mask, _err);
+			}
+		}
+		else
+		{
+			total += bx::writeLE(_writer, uint32_t(8*sizeof(uint32_t) ), _err); // pixelFormatSize
+			total += bx::writeLE(_writer, uint32_t(DDPF_FOURCC), _err);
+
+			if (UINT32_MAX != fourccFormat)
+			{
+				total += bx::writeLE(_writer, fourccFormat, _err);
+			}
+			else
+			{
+				total += bx::writeLE(_writer, uint32_t(DDS_DX10), _err);
+			}
+
+			total += bx::writeLE(_writer, uint32_t(0), _err); // bitCount
+#else
 			total += bx::write(_writer, uint32_t(8*sizeof(uint32_t) ), _err); // pixelFormatSize
 			total += bx::write(_writer, pf.m_flags, _err);
 			total += bx::write(_writer, uint32_t(0), _err);
@@ -7771,6 +8099,7 @@ namespace bimg
 			}
 
 			total += bx::write(_writer, uint32_t(0), _err); // bitCount
+#endif // BX_PLATFORM_WIIU
 			total += bx::writeRep(_writer, 0, 4*sizeof(uint32_t), _err); // bitmask
 		}
 
@@ -7782,7 +8111,14 @@ namespace bimg
 			0,
 		};
 
+#if BX_PLATFORM_WIIU
+		for (uint32_t cap : caps)
+		{
+			total += bx::writeLE(_writer, cap, _err);
+		}
+#else
 		total += bx::write(_writer, caps, sizeof(caps), _err);
+#endif // BX_PLATFORM_WIIU
 
 		total += bx::writeRep(_writer, 0, 4, _err); // reserved2
 
@@ -7794,11 +8130,19 @@ namespace bimg
 
 		if (UINT32_MAX != dxgiFormat)
 		{
+#if BX_PLATFORM_WIIU
+			total += bx::writeLE(_writer, dxgiFormat, _err);
+			total += bx::writeLE(_writer, uint32_t(0 != _depth ? DDS_DX10_DIMENSION_TEXTURE3D : DDS_DX10_DIMENSION_TEXTURE2D), _err); // dims
+			total += bx::writeLE(_writer, uint32_t(_cubeMap   ? DDS_DX10_MISC_TEXTURECUBE    : 0), _err); // miscFlags
+			total += bx::writeLE(_writer, uint32_t(_numLayers), _err); // arraySize
+			total += bx::writeLE(_writer, uint32_t(0), _err); // miscFlags2
+#else
 			total += bx::write(_writer, dxgiFormat, _err);
 			total += bx::write(_writer, uint32_t(0 != _depth ? DDS_DX10_DIMENSION_TEXTURE3D : DDS_DX10_DIMENSION_TEXTURE2D), _err); // dims
 			total += bx::write(_writer, uint32_t(_cubeMap   ? DDS_DX10_MISC_TEXTURECUBE    : 0), _err); // miscFlags
 			total += bx::write(_writer, uint32_t(_numLayers), _err); // arraySize
 			total += bx::write(_writer, uint32_t(0), _err); // miscFlags2
+#endif // BX_PLATFORM_WIIU
 
 			BX_WARN(total-headerStart == DDS_HEADER_SIZE+20
 				, "DDS: Failed to write header size %d (expected: %d)."
@@ -7839,7 +8183,11 @@ namespace bimg
 				ImageMip mip;
 				if (imageGetRawData(_imageContainer, side, lod, _data, _size, mip) )
 				{
+#if BX_PLATFORM_WIIU
+					total += imageWritePixelsLE(_writer, mip.m_format, mip.m_data, mip.m_size, imageIsLittleEndian(_imageContainer, _data), _err);
+#else
 					total += bx::write(_writer, mip.m_data, mip.m_size, _err);
+#endif // BX_PLATFORM_WIIU
 				}
 			}
 		}
@@ -7860,6 +8208,21 @@ namespace bimg
 
 		int32_t total = 0;
 		total += bx::write(_writer, "\xabKTX 11\xbb\r\n\x1a\n", 12, _err);
+#if BX_PLATFORM_WIIU
+		total += bx::writeLE(_writer, uint32_t(0x04030201), _err);
+		total += bx::writeLE(_writer, tfi.m_type, _err); // glType is zero for compressed textures.
+		total += bx::writeLE(_writer, uint32_t(bx::max<uint8_t>(1, getPixelWordSize(_format) ) ), _err); // glTypeSize
+		total += bx::writeLE(_writer, isCompressed(_format) ? uint32_t(0) : tfi.m_fmt, _err); // glFormat
+		total += bx::writeLE(_writer, internalFmt, _err); // glInternalFormat
+		total += bx::writeLE(_writer, tfi.m_fmt, _err); // glBaseInternalFormat
+		total += bx::writeLE(_writer, _width, _err);
+		total += bx::writeLE(_writer, _height, _err);
+		total += bx::writeLE(_writer, _depth, _err); //  For 2D and cube textures pixelDepth must be 0.
+		total += bx::writeLE(_writer, _numLayers > 1 ? _numLayers : uint32_t(0), _err); // numberOfArrayElements; If the texture is not an array texture, numberOfArrayElements must equal 0.
+		total += bx::writeLE(_writer, _cubeMap ? uint32_t(6) : uint32_t(1), _err); // numberOfFaces; For cubemaps and cubemap arrays this should be 6. For non cubemaps this should be 1
+		total += bx::writeLE(_writer, uint32_t(_numMips), _err);
+		total += bx::writeLE(_writer, uint32_t(0), _err); // Meta-data size.
+#else
 		total += bx::write(_writer, uint32_t(0x04030201), _err);
 		total += bx::write(_writer, uint32_t(0), _err); // glType; For compressed textures, glType must equal 0
 		total += bx::write(_writer, uint32_t(1), _err); // glTypeSize; For texture data which does not depend on platform endianness, including compressed texture data, glTypeSize must equal 1.
@@ -7873,6 +8236,7 @@ namespace bimg
 		total += bx::write(_writer, _cubeMap ? uint32_t(6) : uint32_t(1), _err); // numberOfFaces; For cubemaps and cubemap arrays this should be 6. For non cubemaps this should be 1
 		total += bx::write(_writer, uint32_t(_numMips), _err);
 		total += bx::write(_writer, uint32_t(0), _err); // Meta-data size.
+#endif // BX_PLATFORM_WIIU
 
 		BX_WARN(total == 64, "KTX: Failed to write header size %d (expected: %d).", total, 64);
 		return total;
@@ -7914,13 +8278,21 @@ namespace bimg
 
 			const uint32_t mipSize = mipWidth/blockWidth * mipHeight/blockHeight * depth * blockSize;
 			const uint32_t size = numSides == 6 && numLayers == 1 ? mipSize : mipSize * numSides * numLayers;
+#if BX_PLATFORM_WIIU
+			total += bx::writeLE(_writer, size, _err);
+#else
 			total += bx::write(_writer, size, _err);
+#endif // BX_PLATFORM_WIIU
 
 			for (uint32_t layer = 0; layer < numLayers && _err->isOk(); ++layer)
 			{
 				for (uint8_t side = 0; side < numSides && _err->isOk(); ++side)
 				{
+#if BX_PLATFORM_WIIU
+					total += imageWritePixelsLE(_writer, _format, src, mipSize, BX_CPU_ENDIAN_LITTLE, _err);
+#else
 					total += bx::write(_writer, src, mipSize, _err);
+#endif // BX_PLATFORM_WIIU
 					src += mipSize;
 				}
 			}
@@ -7965,7 +8337,11 @@ namespace bimg
 			imageGetRawData(_imageContainer, 0, lod, _data, _size, mip);
 
 			const uint32_t size = numSides == 6 && numLayers == 1 ? mip.m_size : mip.m_size * numSides * numLayers;
+#if BX_PLATFORM_WIIU
+			total += bx::writeLE(_writer, size, _err);
+#else
 			total += bx::write(_writer, size, _err);
+#endif // BX_PLATFORM_WIIU
 
 			for (uint32_t layer = 0; layer < numLayers && _err->isOk(); ++layer)
 			{
@@ -7973,7 +8349,11 @@ namespace bimg
 				{
 					if (imageGetRawData(_imageContainer, uint16_t(layer*numSides + side), lod, _data, _size, mip) )
 					{
+#if BX_PLATFORM_WIIU
+						total += imageWritePixelsLE(_writer, mip.m_format, mip.m_data, mip.m_size, imageIsLittleEndian(_imageContainer, _data), _err);
+#else
 						total += bx::write(_writer, mip.m_data, mip.m_size, _err);
+#endif // BX_PLATFORM_WIIU
 					}
 				}
 			}

@@ -307,6 +307,10 @@ namespace bimg
 	/// Returns texture block info.
 	const ImageBlockInfo& getBlockInfo(TextureFormat::Enum _format);
 
+	/// Returns the byte size of each native pixel word (component or packed value).
+	/// Returns 0 for compressed formats and 1 for byte formats. D32FS8 uses two 4-byte words.
+	uint8_t getPixelWordSize(TextureFormat::Enum _format);
+
 	/// Converts format to string.
 	const char* getName(TextureFormat::Enum _format);
 
@@ -701,6 +705,10 @@ namespace bimg
 		, uint32_t _size
 		, bx::Error* _err
 		);
+
+	/// Returns true if this build can decode the format to RGBA8/BGRA8 pixels.
+	/// Excludes disabled decoders and unimplemented checkerboard fallbacks.
+	bool imageDecodeSupported(TextureFormat::Enum _format);
 
 	///
 	void imageDecodeToR8(
