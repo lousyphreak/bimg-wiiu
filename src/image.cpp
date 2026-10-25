@@ -7365,9 +7365,14 @@ namespace bimg
 
 		default:
 			{
+#if BX_PLATFORM_WIIU
+				imageDecodeToBgra8(_allocator, _dst, _src, _width, _height, _dstPitch, _srcFormat);
+				imageSwizzleBgra8(_dst, _dstPitch, _width, _height, _dst, _dstPitch);
+#else
 				const uint32_t srcPitch = _width * 4;
 				imageDecodeToBgra8(_allocator, _dst, _src, _width, _height, _dstPitch, _srcFormat);
 				imageSwizzleBgra8(_dst, _dstPitch, _width, _height, _dst, srcPitch);
+#endif // BX_PLATFORM_WIIU
 			}
 			break;
 		}

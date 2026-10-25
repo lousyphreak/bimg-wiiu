@@ -508,7 +508,7 @@ namespace bimg
 		, uint32_t _dstPitch
 		);
 
-	/// Convert pixels with explicit byte pitches, including bit-packed R1 rows.
+	/// Convert native-endian uncompressed pixels with explicit byte pitches, including R1.
 	bool imageConvert(
 		  bx::AllocatorI* _allocator
 		, void* _dst
