@@ -1378,14 +1378,18 @@ namespace bimg
 		{ bx::packBgr5a1,     bx::unpackBgr5a1     }, // BGR5A1
 		{ bx::packRgb5a1,     bx::unpackRgb5a1     }, // RGB5A1
 		{ bx::packRgb10A2,    bx::unpackRgb10A2    }, // RGB10A2
+#if BX_PLATFORM_WIIU
+		{ bx::packRgb10A2U,   bx::unpackRgb10A2U   }, // RGB10A2U
+		{ bx::packRG11B10F,   bx::unpackRG11B10F   }, // RG11B10F
+		{ NULL,               NULL                 }, // UnknownDepth
+		{ bx::packR16,        bx::unpackR16        }, // D16
+		{ packNativeDepth<TextureFormat::D24, bx::packR24>, unpackNativeDepth<TextureFormat::D24, bx::unpackR24> }, // D24
+		{ packNativeDepth<TextureFormat::D24S8, bx::packR24G8>, unpackNativeDepth<TextureFormat::D24S8, bx::unpackR24G8> }, // D24S8
+#else
 		{ NULL,               NULL                 }, // RGB10A2U
 		{ bx::packRG11B10F,   bx::unpackRG11B10F   }, // RG11B10F
 		{ NULL,               NULL                 }, // UnknownDepth
 		{ bx::packR16,        bx::unpackR16        }, // D16
-#if BX_PLATFORM_WIIU
-		{ packNativeDepth<TextureFormat::D24, bx::packR24>, unpackNativeDepth<TextureFormat::D24, bx::unpackR24> }, // D24
-		{ packNativeDepth<TextureFormat::D24S8, bx::packR24G8>, unpackNativeDepth<TextureFormat::D24S8, bx::unpackR24G8> }, // D24S8
-#else
 		{ bx::packR24,        bx::unpackR24        }, // D24
 		{ bx::packR24G8,      bx::unpackR24G8      }, // D24S8
 #endif // BX_PLATFORM_WIIU
