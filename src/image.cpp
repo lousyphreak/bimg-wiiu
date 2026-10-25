@@ -430,6 +430,11 @@ namespace bimg
 
 	uint8_t imageGetNumMips(TextureFormat::Enum _format, uint32_t _width, uint32_t _height, uint32_t _depth)
 	{
+#if BX_PLATFORM_WIIU
+		if (_format == TextureFormat::R1)
+			return calcNumMips(true, _width, _height, bx::max<uint32_t>(1, _depth));
+
+#endif // BX_PLATFORM_WIIU
 		const ImageBlockInfo& blockInfo = getBlockInfo(_format);
 		const uint32_t blockWidth  = blockInfo.blockWidth;
 		const uint32_t blockHeight = blockInfo.blockHeight;
@@ -3909,7 +3914,13 @@ namespace bimg
 		const uint32_t minBlockX   = blockInfo.minBlockX;
 		const uint32_t minBlockY   = blockInfo.minBlockY;
 
+#if BX_PLATFORM_WIIU
+		// R1 pads each row to bytes without changing the logical mip dimensions.
+		_width     = _format == TextureFormat::R1 ? bx::max<uint32_t>(1, _width)
+			: bx::max<uint32_t>(blockWidth * minBlockX, ((_width+blockWidth-1)/blockWidth)*blockWidth);
+#else
 		_width     = bx::max<uint32_t>(blockWidth  * minBlockX, ( (_width  + blockWidth  - 1) / blockWidth)*blockWidth);
+#endif // BX_PLATFORM_WIIU
 		_height    = bx::max<uint32_t>(blockHeight * minBlockY, ( (_height + blockHeight - 1) / blockHeight)*blockHeight);
 		_numLayers = bx::max<uint32_t>(1, _numLayers);
 
