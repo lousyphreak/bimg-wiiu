@@ -1416,8 +1416,13 @@ namespace bimg
 	{
 		UnpackFn unpack = s_packUnpack[_srcFormat].unpack;
 		PackFn   pack   = s_packUnpack[_dstFormat].pack;
+#if BX_PLATFORM_WIIU
+		return (NULL != pack || _dstFormat == TextureFormat::R1)
+			&& (NULL != unpack || _srcFormat == TextureFormat::R1)
+#else
 		return NULL != pack
 			&& NULL != unpack
+#endif // BX_PLATFORM_WIIU
 			;
 	}
 
@@ -1471,8 +1476,43 @@ namespace bimg
 			return true;
 		}
 
+#if BX_PLATFORM_WIIU
+		if (_srcFormat == TextureFormat::R1 && _dstFormat == TextureFormat::R1)
+		{
+			bx::memCopy(_dst, _dstPitch, _src, _srcPitch, (_width+7)/8, _height*_depth);
+			return true;
+		}
+
 		UnpackFn unpack = s_packUnpack[_srcFormat].unpack;
 		PackFn   pack   = s_packUnpack[_dstFormat].pack;
+		if ((_srcFormat == TextureFormat::R1 || _dstFormat == TextureFormat::R1)
+		&& imageConvert(_dstFormat, _srcFormat) )
+		{
+			const uint8_t* src = (const uint8_t*)_src;
+			uint8_t* dst = (uint8_t*)_dst;
+			const uint32_t srcBytes = s_imageBlockInfo[_srcFormat].bitsPerPixel / 8;
+			const uint32_t dstBytes = s_imageBlockInfo[_dstFormat].bitsPerPixel / 8;
+			for (uint32_t zz = 0; zz < _depth; ++zz)
+				for (uint32_t yy = 0; yy < _height; ++yy, src += _srcPitch, dst += _dstPitch)
+				{
+					if (_dstFormat == TextureFormat::R1) bx::memSet(dst, 0, (_width+7)/8);
+					for (uint32_t xx = 0; xx < _width; ++xx)
+					{
+						float rgba[4] = {0, 0, 0, 1};
+						// DXGI R1 scanlines store the first pixel in the byte's MSB.
+						if (_srcFormat == TextureFormat::R1) rgba[0] = float((src[xx/8] >> (7-(xx&7))) & 1);
+						else unpack(rgba, src+xx*srcBytes);
+						if (_dstFormat == TextureFormat::R1) dst[xx/8] |= uint8_t(bx::toUnorm(rgba[0], 1.0f) << (7-(xx&7)));
+						else pack(dst+xx*dstBytes, rgba);
+					}
+				}
+			return true;
+		}
+
+#else
+		UnpackFn unpack = s_packUnpack[_srcFormat].unpack;
+		PackFn   pack   = s_packUnpack[_dstFormat].pack;
+#endif // BX_PLATFORM_WIIU
 		if (NULL == pack
 		||  NULL == unpack)
 		{
@@ -1510,14 +1550,28 @@ namespace bimg
 
 		if (_dstFormat == _srcFormat)
 		{
+#if BX_PLATFORM_WIIU
+			const uint64_t size = _srcFormat == TextureFormat::R1
+				? uint64_t((_width+7)/8)*_height*_depth
+				: uint64_t(_width)*_height*_depth*srcBpp/8;
+			bx::memCopy(_dst, _src, size);
+#else
 			bx::memCopy(_dst, _src, (uint64_t(_width) * _height * _depth * srcBpp) / 8);
+#endif // BX_PLATFORM_WIIU
 			return true;
 		}
 
 		const uint32_t dstBpp   = s_imageBlockInfo[_dstFormat].bitsPerPixel;
+#if BX_PLATFORM_WIIU
+		const uint32_t dstPitch = _dstFormat == TextureFormat::R1 ? (_width+7)/8 : _width*dstBpp/8;
+		const uint32_t srcPitch = _srcFormat == TextureFormat::R1 ? (_width+7)/8 : _width*srcBpp/8;
+
+		return imageConvert(_allocator, _dst, _dstFormat, _src, _srcFormat, _width, _height, _depth, srcPitch, dstPitch);
+#else
 		const uint32_t dstPitch = _width * dstBpp / 8;
 
 		return imageConvert(_allocator, _dst, _dstFormat, _src, _srcFormat, _width, _height, _depth, _width*srcBpp/8, dstPitch);
+#endif // BX_PLATFORM_WIIU
 	}
 
 	ImageContainer* imageConvert(bx::AllocatorI* _allocator, TextureFormat::Enum _dstFormat, const ImageContainer& _input, bool _convertMips)
@@ -1559,7 +1613,11 @@ namespace bimg
 						;
 
 					const uint32_t dstBpp       = s_imageBlockInfo[_dstFormat].bitsPerPixel;
+#if BX_PLATFORM_WIIU
+					const uint32_t scratchPitch = _dstFormat == TextureFormat::R1 ? (mip.m_width+7)/8 : mip.m_width*dstBpp/8;
+#else
 					const uint32_t scratchPitch = mip.m_width * dstBpp / 8;
+#endif // BX_PLATFORM_WIIU
 					const uint32_t scratchSize  = scratchPitch * mip.m_height * mip.m_depth;
 					uint8_t* scratch = needScratch
 						? (uint8_t*)bx::alloc(_allocator, scratchSize)
@@ -1580,7 +1638,11 @@ namespace bimg
 					if (ok
 					&&  needScratch)
 					{
+#if BX_PLATFORM_WIIU
+						const uint32_t dstPitch = _dstFormat == TextureFormat::R1 ? (dstMip.m_width+7)/8 : dstMip.m_width*dstBpp/8;
+#else
 						const uint32_t dstPitch = dstMip.m_width * dstBpp / 8;
+#endif // BX_PLATFORM_WIIU
 						for (uint32_t zz = 0; zz < dstMip.m_depth; ++zz)
 						{
 							bx::memCopy(
@@ -6523,6 +6585,9 @@ namespace bimg
 		case TextureFormat::EACRG11S:
 			return BX_ENABLED(BIMG_CONFIG_DECODE_ETC2);
 
+#if BX_PLATFORM_WIIU
+		case TextureFormat::R1:
+#endif // BX_PLATFORM_WIIU
 		case TextureFormat::PTC14:
 		case TextureFormat::PTC14A:
 			return true;
@@ -6569,7 +6634,11 @@ namespace bimg
 		uint8_t* dst = (uint8_t*)_dst;
 
 		const uint32_t srcBpp = s_imageBlockInfo[_srcFormat].bitsPerPixel;
+#if BX_PLATFORM_WIIU
+		const uint32_t srcPitch = _srcFormat == TextureFormat::R1 ? (_width+7)/8 : _width*srcBpp/8;
+#else
 		const uint32_t srcPitch = _width*srcBpp/8;
+#endif // BX_PLATFORM_WIIU
 
 		for (uint32_t zz = 0; zz < _depth; ++zz, src += _height*srcPitch, dst += _height*_dstPitch)
 		{
@@ -6600,6 +6669,12 @@ namespace bimg
 
 		switch (_srcFormat)
 		{
+#if BX_PLATFORM_WIIU
+		case TextureFormat::R1:
+			imageConvert(_allocator, _dst, TextureFormat::BGRA8, _src, _srcFormat, _width, _height, 1, (_width+7)/8, _dstPitch);
+			break;
+
+#endif // BX_PLATFORM_WIIU
 		case TextureFormat::BC1:
 			if (BX_ENABLED(BIMG_CONFIG_DECODE_BC1) )
 			{
@@ -7338,7 +7413,11 @@ namespace bimg
 		uint8_t* dst = (uint8_t*)_dst;
 
 		const uint32_t srcBpp   = s_imageBlockInfo[_srcFormat].bitsPerPixel;
+#if BX_PLATFORM_WIIU
+		const uint32_t srcPitch = _srcFormat == TextureFormat::R1 ? (_width+7)/8 : _width*srcBpp/8;
+#else
 		const uint32_t srcPitch = _width*srcBpp/8;
+#endif // BX_PLATFORM_WIIU
 
 		for (uint32_t zz = 0; zz < _depth; ++zz, src += _height*srcPitch, dst += _height*_dstPitch)
 		{
