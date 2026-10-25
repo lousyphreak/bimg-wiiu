@@ -5,6 +5,9 @@
 
 #include "bimg_p.h"
 #include <bx/hash.h>
+#if BX_PLATFORM_WIIU
+#include "../3rdparty/pvrtc/PVRTDecompress.h"
+#endif // BX_PLATFORM_WIIU
 
 #if BIMG_CONFIG_DECODE_ASTC
 #include <astcenc.h>
@@ -6556,6 +6559,21 @@ namespace bimg
 
 		bx::MemoryReader reader(_data, _size);
 		return imageParse(_imageContainer, &reader, _err);
+#if BX_PLATFORM_WIIU
+	}
+
+	static void decodePtc12(bx::AllocatorI* _allocator, void* _dst, const void* _src,
+		uint32_t _width, uint32_t _height, uint32_t _dstPitch, bool _alpha, bool _bgra)
+	{
+		const uint32_t rowBytes = _width*4;
+		void* decoded = _dstPitch == rowBytes ? _dst : bx::alloc(_allocator, rowBytes*_height);
+		pvr::PVRTDecompressPVRTC(_src, 1, _width, _height, (uint8_t*)decoded);
+		if (!_alpha)
+			for (uint32_t pixel = 0; pixel < _width*_height; ++pixel) ((uint8_t*)decoded)[pixel*4+3] = 255;
+		if (_bgra) imageSwizzleBgra8(_dst, _dstPitch, _width, _height, decoded, rowBytes);
+		else if (decoded != _dst) bx::memCopy(_dst, _dstPitch, decoded, rowBytes, rowBytes, _height);
+		if (decoded != _dst) bx::free(_allocator, decoded);
+#endif // BX_PLATFORM_WIIU
 	}
 
 	bool imageDecodeSupported(TextureFormat::Enum _format)
@@ -6594,6 +6612,10 @@ namespace bimg
 
 		case TextureFormat::PTC12:
 		case TextureFormat::PTC12A:
+#if BX_PLATFORM_WIIU
+			return true;
+
+#endif // BX_PLATFORM_WIIU
 		case TextureFormat::PTC22:
 		case TextureFormat::PTC24:
 			return false; // These paths only generate checkerboards.
@@ -7042,6 +7064,10 @@ namespace bimg
 			break;
 
 		case TextureFormat::PTC12:
+#if BX_PLATFORM_WIIU
+		case TextureFormat::PTC12A:
+			decodePtc12(_allocator, _dst, _src, _width, _height, _dstPitch, _srcFormat == TextureFormat::PTC12A, true);
+#else
 			BX_WARN(false, "PTC12 decoder is not implemented.");
 			imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xffff00ff) );
 			break;
@@ -7049,6 +7075,7 @@ namespace bimg
 		case TextureFormat::PTC12A:
 			BX_WARN(false, "PTC12A decoder is not implemented.");
 			imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xffffff00) );
+#endif // BX_PLATFORM_WIIU
 			break;
 
 		case TextureFormat::PTC14:
@@ -7205,6 +7232,13 @@ namespace bimg
 	{
 		switch (_srcFormat)
 		{
+#if BX_PLATFORM_WIIU
+		case TextureFormat::PTC12:
+		case TextureFormat::PTC12A:
+			decodePtc12(_allocator, _dst, _src, _width, _height, _dstPitch, _srcFormat == TextureFormat::PTC12A, false);
+			break;
+
+#endif // BX_PLATFORM_WIIU
 		case TextureFormat::RGBA8:
 			{
 				const uint32_t srcPitch = _width * 4;
