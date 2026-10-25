@@ -1170,7 +1170,12 @@ ASTCENC_SIMD_INLINE vint4 vtable_8bt_32bi(vint4 t0, vint4 t1, vint4 t2, vint4 t3
  */
 ASTCENC_SIMD_INLINE vint4 interleave_rgba8(vint4 r, vint4 g, vint4 b, vint4 a)
 {
+#if defined(__WIIU__)
+	// Lanes are stored as native words; keep RGBA byte order in memory.
+	return lsl<24>(r) + lsl<16>(g) + lsl<8>(b) + a;
+#else
 	return r + lsl<8>(g) + lsl<16>(b) + lsl<24>(a);
+#endif
 }
 
 /**

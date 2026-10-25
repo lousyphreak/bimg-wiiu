@@ -7198,7 +7198,13 @@ namespace bimg
 					image.dim_y     = _height;
 					image.dim_z     = 1;
 					image.data_type = ASTCENC_TYPE_U8;
+#if BX_PLATFORM_WIIU
+					const uint32_t rowBytes = _width*4;
+					void* decoded = _dstPitch == rowBytes ? _dst : bx::alloc(_allocator, rowBytes*_height);
+					image.data      = &decoded;
+#else
 					image.data      = &_dst;
+#endif // BX_PLATFORM_WIIU
 
 					const uint64_t size = imageGetSize(NULL, _width, _height, 0, false, false, 1, _srcFormat);
 
@@ -7224,10 +7230,20 @@ namespace bimg
 						BX_TRACE("astc error in compress image %s", astcenc_get_error_string(status));
 						imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xffffff00) );
 
+#if BX_PLATFORM_WIIU
+						if (decoded != _dst) bx::free(_allocator, decoded);
+#endif // BX_PLATFORM_WIIU
 						astcenc_context_free(context);
 						break;
 					}
 
+#if BX_PLATFORM_WIIU
+					if (decoded != _dst)
+					{
+						bx::memCopy(_dst, _dstPitch, decoded, rowBytes, rowBytes, _height);
+						bx::free(_allocator, decoded);
+					}
+#endif // BX_PLATFORM_WIIU
 					astcenc_context_free(context);
 			}
 #else

@@ -30,6 +30,9 @@
 #endif
 #include <cstdlib>
 #include <limits>
+#if defined(__WIIU__)
+	#include <malloc.h>
+#endif
 
 #include "astcenc.h"
 #include "astcenc_mathlib.h"
@@ -2197,6 +2200,8 @@ T* aligned_malloc(size_t size, size_t align)
 
 #if defined(_WIN32)
 	ptr = _aligned_malloc(size, real_align);
+#elif defined(__WIIU__)
+	ptr = memalign(real_align, size);
 #else
 	error = posix_memalign(&ptr, real_align, size);
 #endif
