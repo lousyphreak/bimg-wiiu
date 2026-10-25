@@ -52,8 +52,13 @@ namespace bimg
 		{   4,  4, 4,  8, 2, 2,  0, 0,  0,  0,  0,  0, uint8_t(bx::EncodingType::Unorm) }, // PTC14
 		{   2,  8, 4,  8, 2, 2,  0, 0,  0,  0,  0,  0, uint8_t(bx::EncodingType::Unorm) }, // PTC12A
 		{   4,  4, 4,  8, 2, 2,  0, 0,  0,  0,  0,  0, uint8_t(bx::EncodingType::Unorm) }, // PTC14A
+#if BX_PLATFORM_WIIU
+		{   2,  8, 4,  8, 1, 1,  0, 0,  0,  0,  0,  0, uint8_t(bx::EncodingType::Unorm) }, // PTC22
+		{   4,  4, 4,  8, 1, 1,  0, 0,  0,  0,  0,  0, uint8_t(bx::EncodingType::Unorm) }, // PTC24
+#else
 		{   2,  8, 4,  8, 2, 2,  0, 0,  0,  0,  0,  0, uint8_t(bx::EncodingType::Unorm) }, // PTC22
 		{   4,  4, 4,  8, 2, 2,  0, 0,  0,  0,  0,  0, uint8_t(bx::EncodingType::Unorm) }, // PTC24
+#endif // BX_PLATFORM_WIIU
 		{   4,  4, 4,  8, 1, 1,  0, 0,  0,  0,  0,  0, uint8_t(bx::EncodingType::Unorm) }, // ATC
 		{   8,  4, 4, 16, 1, 1,  0, 0,  0,  0,  0,  0, uint8_t(bx::EncodingType::Unorm) }, // ATCE
 		{   8,  4, 4, 16, 1, 1,  0, 0,  0,  0,  0,  0, uint8_t(bx::EncodingType::Unorm) }, // ATCI
@@ -6573,13 +6578,14 @@ namespace bimg
 #if BX_PLATFORM_WIIU
 	}
 
-	static void decodePtc12(bx::AllocatorI* _allocator, void* _dst, const void* _src,
-		uint32_t _width, uint32_t _height, uint32_t _dstPitch, bool _alpha, bool _bgra)
+	static void decodePtc(bx::AllocatorI* _allocator, void* _dst, const void* _src,
+		uint32_t _width, uint32_t _height, uint32_t _dstPitch, TextureFormat::Enum _format, bool _bgra)
 	{
 		const uint32_t rowBytes = _width*4;
 		void* decoded = _dstPitch == rowBytes ? _dst : bx::alloc(_allocator, rowBytes*_height);
-		pvr::PVRTDecompressPVRTC(_src, 1, _width, _height, (uint8_t*)decoded);
-		if (!_alpha)
+		const bool version2 = _format == TextureFormat::PTC22 || _format == TextureFormat::PTC24;
+		pvr::PVRTDecompressPVRTC(_src, _format != TextureFormat::PTC24, _width, _height, (uint8_t*)decoded, version2);
+		if (_format == TextureFormat::PTC12)
 			for (uint32_t pixel = 0; pixel < _width*_height; ++pixel) ((uint8_t*)decoded)[pixel*4+3] = 255;
 		if (_bgra) imageSwizzleBgra8(_dst, _dstPitch, _width, _height, decoded, rowBytes);
 		else if (decoded != _dst) bx::memCopy(_dst, _dstPitch, decoded, rowBytes, rowBytes, _height);
@@ -6623,13 +6629,13 @@ namespace bimg
 
 		case TextureFormat::PTC12:
 		case TextureFormat::PTC12A:
-#if BX_PLATFORM_WIIU
-			return true;
-
-#endif // BX_PLATFORM_WIIU
 		case TextureFormat::PTC22:
 		case TextureFormat::PTC24:
+#if BX_PLATFORM_WIIU
+			return true;
+#else
 			return false; // These paths only generate checkerboards.
+#endif // BX_PLATFORM_WIIU
 
 		case TextureFormat::ATC:
 			return BX_ENABLED(BIMG_CONFIG_DECODE_ATC);
@@ -7077,7 +7083,9 @@ namespace bimg
 		case TextureFormat::PTC12:
 #if BX_PLATFORM_WIIU
 		case TextureFormat::PTC12A:
-			decodePtc12(_allocator, _dst, _src, _width, _height, _dstPitch, _srcFormat == TextureFormat::PTC12A, true);
+		case TextureFormat::PTC22:
+		case TextureFormat::PTC24:
+			decodePtc(_allocator, _dst, _src, _width, _height, _dstPitch, _srcFormat, true);
 #else
 			BX_WARN(false, "PTC12 decoder is not implemented.");
 			imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xffff00ff) );
@@ -7121,6 +7129,7 @@ namespace bimg
 			}
 			break;
 
+#if !BX_PLATFORM_WIIU
 		case TextureFormat::PTC22:
 			BX_WARN(false, "PTC22 decoder is not implemented.");
 			imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff00ff00), UINT32_C(0xff0000ff) );
@@ -7131,6 +7140,7 @@ namespace bimg
 			imageCheckerboard(_dst, _width, _height, 16, UINT32_C(0xff000000), UINT32_C(0xffffffff) );
 			break;
 
+#endif // BX_PLATFORM_WIIU
 		case TextureFormat::ATC:
 			for (uint32_t yy = 0; yy < height; ++yy)
 			{
@@ -7246,7 +7256,9 @@ namespace bimg
 #if BX_PLATFORM_WIIU
 		case TextureFormat::PTC12:
 		case TextureFormat::PTC12A:
-			decodePtc12(_allocator, _dst, _src, _width, _height, _dstPitch, _srcFormat == TextureFormat::PTC12A, false);
+		case TextureFormat::PTC22:
+		case TextureFormat::PTC24:
+			decodePtc(_allocator, _dst, _src, _width, _height, _dstPitch, _srcFormat, false);
 			break;
 
 #endif // BX_PLATFORM_WIIU

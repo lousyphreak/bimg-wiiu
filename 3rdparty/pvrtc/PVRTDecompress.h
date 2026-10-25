@@ -28,8 +28,9 @@ struct PVRTCWordIndices
 	int P[2], Q[2], R[2], S[2];
 };
 
-static Pixel32 getColorA(uint32_t colorData)
+static Pixel32 getColorA(uint32_t colorData, bool version2)
 {
+	if (version2) colorData = (colorData & ~0x8000u) | ((colorData >> 16) & 0x8000u);
 	Pixel32 color;
 
 	// Opaque Color Mode - RGB 554
@@ -52,7 +53,7 @@ static Pixel32 getColorA(uint32_t colorData)
 	return color;
 }
 
-static Pixel32 getColorB(uint32_t colorData)
+static Pixel32 getColorB(uint32_t colorData, bool version2)
 {
 	Pixel32 color;
 
@@ -70,7 +71,7 @@ static Pixel32 getColorB(uint32_t colorData)
 		color.red = static_cast<uint8_t>(((colorData & 0xf000000) >> 23) | ((colorData & 0xf000000) >> 27)); // 4->5 bits
 		color.green = static_cast<uint8_t>(((colorData & 0xf00000) >> 19) | ((colorData & 0xf00000) >> 23)); // 4->5 bits
 		color.blue = static_cast<uint8_t>(((colorData & 0xf0000) >> 15) | ((colorData & 0xf0000) >> 19)); // 4->5 bits
-		color.alpha = static_cast<uint8_t>((colorData & 0x70000000) >> 27); // 3->4 bits - note 0 at right
+		color.alpha = static_cast<uint8_t>(((colorData & 0x70000000) >> 27) | (version2 ? 1 : 0)); // 3->4 bits - note 0 at right
 	}
 
 	return color;
@@ -339,7 +340,22 @@ static int32_t getModulationValues(int32_t modulationValues[16][8], int32_t modu
 	return 0;
 }
 
-static void pvrtcGetDecompressedPixels(const PVRTCWord& P, const PVRTCWord& Q, const PVRTCWord& R, const PVRTCWord& S, Pixel32* pColorData, uint8_t bpp)
+static Pixel32 expandColor(Pixel32 color)
+{
+	return Pixel32{uint8_t((color.red << 3) | (color.red >> 2)),
+		uint8_t((color.green << 3) | (color.green >> 2)),
+		uint8_t((color.blue << 3) | (color.blue >> 2)), uint8_t(color.alpha * 17)};
+}
+
+static Pixel32 blendColors(Pixel32 a, Pixel32 b, int weight)
+{
+	return Pixel32{uint8_t((a.red * (8-weight) + b.red * weight) / 8),
+		uint8_t((a.green * (8-weight) + b.green * weight) / 8),
+		uint8_t((a.blue * (8-weight) + b.blue * weight) / 8),
+		uint8_t((a.alpha * (8-weight) + b.alpha * weight) / 8)};
+}
+
+static void pvrtcGetDecompressedPixels(const PVRTCWord& P, const PVRTCWord& Q, const PVRTCWord& R, const PVRTCWord& S, Pixel32* pColorData, uint8_t bpp, bool version2)
 {
 	// 4bpp only needs 8*8 values, but 2bpp needs 16*8, so rather than wasting processor time we just statically allocate 16*8.
 	int32_t modulationValues[16][8];
@@ -359,49 +375,98 @@ static void pvrtcGetDecompressedPixels(const PVRTCWord& P, const PVRTCWord& Q, c
 	unpackModulations(R, 0, wordHeight, modulationValues, modulationModes, bpp);
 	unpackModulations(S, wordWidth, wordHeight, modulationValues, modulationModes, bpp);
 
-	// Bilinear upscale image data from 2x2 -> 4x4
-	interpolateColors(getColorA(P.colorData), getColorA(Q.colorData), getColorA(R.colorData), getColorA(S.colorData), upscaledColorA, bpp);
-	interpolateColors(getColorB(P.colorData), getColorB(Q.colorData), getColorB(R.colorData), getColorB(S.colorData), upscaledColorB, bpp);
-
-	for (uint32_t y = 0; y < wordHeight; y++)
+	// Hard-transition regions bypass endpoint upscaling entirely.
+	if (!(version2 && (P.colorData & 0x8000u)))
 	{
-		for (uint32_t x = 0; x < wordWidth; x++)
+		// Bilinear upscale image data from 2x2 -> 4x4
+		interpolateColors(getColorA(P.colorData, version2), getColorA(Q.colorData, version2), getColorA(R.colorData, version2), getColorA(S.colorData, version2), upscaledColorA, bpp);
+		interpolateColors(getColorB(P.colorData, version2), getColorB(Q.colorData, version2), getColorB(R.colorData, version2), getColorB(S.colorData, version2), upscaledColorB, bpp);
+
+		for (uint32_t y = 0; y < wordHeight; y++)
 		{
-			int32_t mod = getModulationValues(modulationValues, modulationModes, x + wordWidth / 2, y + wordHeight / 2, bpp);
-			bool punchthroughAlpha = false;
-			if (mod > 10)
+			for (uint32_t x = 0; x < wordWidth; x++)
 			{
-				punchthroughAlpha = true;
-				mod -= 10;
-			}
+				int32_t mod = getModulationValues(modulationValues, modulationModes, x + wordWidth / 2, y + wordHeight / 2, bpp);
+				bool punchthroughAlpha = false;
+				if (mod > 10)
+				{
+					punchthroughAlpha = true;
+					mod -= 10;
+				}
 
-			Pixel128S result;
-			result.red = (upscaledColorA[y * wordWidth + x].red * (8 - mod) + upscaledColorB[y * wordWidth + x].red * mod) / 8;
-			result.green = (upscaledColorA[y * wordWidth + x].green * (8 - mod) + upscaledColorB[y * wordWidth + x].green * mod) / 8;
-			result.blue = (upscaledColorA[y * wordWidth + x].blue * (8 - mod) + upscaledColorB[y * wordWidth + x].blue * mod) / 8;
-			if (punchthroughAlpha) { result.alpha = 0; }
-			else
-			{
-				result.alpha = (upscaledColorA[y * wordWidth + x].alpha * (8 - mod) + upscaledColorB[y * wordWidth + x].alpha * mod) / 8;
-			}
+				Pixel128S result;
+				result.red = (upscaledColorA[y * wordWidth + x].red * (8 - mod) + upscaledColorB[y * wordWidth + x].red * mod) / 8;
+				result.green = (upscaledColorA[y * wordWidth + x].green * (8 - mod) + upscaledColorB[y * wordWidth + x].green * mod) / 8;
+				result.blue = (upscaledColorA[y * wordWidth + x].blue * (8 - mod) + upscaledColorB[y * wordWidth + x].blue * mod) / 8;
+				if (punchthroughAlpha)
+				{
+					result.alpha = 0;
+					if (version2) result.red = result.green = result.blue = 0;
+				}
+				else
+				{
+					result.alpha = (upscaledColorA[y * wordWidth + x].alpha * (8 - mod) + upscaledColorB[y * wordWidth + x].alpha * mod) / 8;
+				}
 
-			// Convert the 32bit precision Result to 8 bit per channel color.
-			if (bpp == 2)
-			{
-				pColorData[y * wordWidth + x].red = static_cast<uint8_t>(result.red);
-				pColorData[y * wordWidth + x].green = static_cast<uint8_t>(result.green);
-				pColorData[y * wordWidth + x].blue = static_cast<uint8_t>(result.blue);
-				pColorData[y * wordWidth + x].alpha = static_cast<uint8_t>(result.alpha);
-			}
-			else if (bpp == 4)
-			{
-				pColorData[y + x * wordHeight].red = static_cast<uint8_t>(result.red);
-				pColorData[y + x * wordHeight].green = static_cast<uint8_t>(result.green);
-				pColorData[y + x * wordHeight].blue = static_cast<uint8_t>(result.blue);
-				pColorData[y + x * wordHeight].alpha = static_cast<uint8_t>(result.alpha);
+				// Convert the 32bit precision Result to 8 bit per channel color.
+				if (bpp == 2)
+				{
+					pColorData[y * wordWidth + x].red = static_cast<uint8_t>(result.red);
+					pColorData[y * wordWidth + x].green = static_cast<uint8_t>(result.green);
+					pColorData[y * wordWidth + x].blue = static_cast<uint8_t>(result.blue);
+					pColorData[y * wordWidth + x].alpha = static_cast<uint8_t>(result.alpha);
+				}
+				else if (bpp == 4)
+				{
+					pColorData[y + x * wordHeight].red = static_cast<uint8_t>(result.red);
+					pColorData[y + x * wordHeight].green = static_cast<uint8_t>(result.green);
+					pColorData[y + x * wordHeight].blue = static_cast<uint8_t>(result.blue);
+					pColorData[y + x * wordHeight].alpha = static_cast<uint8_t>(result.alpha);
+				}
 			}
 		}
 	}
+	else
+	// H belongs to P's complete interpolation region. M belongs to the
+	// individual word containing the modulation data for the output texel.
+	{
+		const PVRTCWord* words[4] = {&P, &Q, &R, &S};
+		Pixel32 palette[10];
+		for (unsigned int i = 0; i < 4; ++i)
+		{
+			palette[2*i] = expandColor(getColorA(words[i]->colorData, true));
+			palette[2*i+1] = expandColor(getColorB(words[i]->colorData, true));
+		}
+		palette[8] = blendColors(palette[0], palette[1], 3);
+		palette[9] = blendColors(palette[0], palette[1], 5);
+		// Khronos DataFormat: PVRTC2 4bpp local-palette selectors at (x,y).
+		static const uint8_t selectors[16][4] = {
+			{0,8,9,1}, {0,1,2,3}, {0,1,2,3}, {0,1,2,3},
+			{0,1,4,5}, {0,1,2,5}, {0,1,2,3}, {6,1,2,3},
+			{0,1,4,5}, {0,1,4,5}, {0,7,4,3}, {6,7,2,3},
+			{0,1,4,5}, {0,7,4,5}, {6,7,4,5}, {6,7,4,3}
+		};
+		for (uint32_t y = 0; y < wordHeight; ++y)
+			for (uint32_t x = 0; x < wordWidth; ++x)
+			{
+				const uint32_t word = (x >= wordWidth/2 ? 1 : 0) + (y >= wordHeight/2 ? 2 : 0);
+				if (bpp == 4 && (words[word]->colorData & 1))
+				{
+					const uint32_t code = (words[word]->modulationData >> (2 * (((y+2)%4)*4 + (x+2)%4))) & 3;
+					pColorData[y*wordWidth+x] = palette[selectors[y*4+x][code]];
+				}
+				else
+				{
+					// The 4bpp reference interpolation uses transposed scratch
+					// coordinates; its output has already been transposed back.
+					const int weight = bpp == 4
+						? getModulationValues(modulationValues, modulationModes, y+2, x+2, bpp)
+						: getModulationValues(modulationValues, modulationModes, x+4, y+2, bpp);
+					pColorData[y*wordWidth+x] = blendColors(palette[2*word], palette[2*word+1], weight);
+				}
+			}
+	}
+
 }
 
 static uint32_t wrapWordIndex(uint32_t numWords, int word) { return ((word + numWords) % numWords); }
@@ -416,7 +481,6 @@ static uint32_t TwiddleUV(uint32_t XSize, uint32_t YSize, uint32_t XPos, uint32_
 	uint32_t DstBitPos = 1;
 	int ShiftCount = 0;
 
-	// Check the sizes are valid.
 
 	// If Y is the larger dimension - switch the min/max values.
 	if (YSize < XSize)
@@ -470,7 +534,7 @@ static uint32_t readLE32(const uint8_t* data)
 	return uint32_t(data[0]) | uint32_t(data[1]) << 8 | uint32_t(data[2]) << 16 | uint32_t(data[3]) << 24;
 }
 
-static uint32_t pvrtcDecompress(const uint8_t* pCompressedData, Pixel32* pDecompressedData, uint32_t width, uint32_t height, uint8_t bpp)
+static uint32_t pvrtcDecompress(const uint8_t* pCompressedData, Pixel32* pDecompressedData, uint32_t width, uint32_t height, uint8_t bpp, bool version2)
 {
 	uint32_t wordWidth = 4;
 	uint32_t wordHeight = 4;
@@ -503,11 +567,14 @@ static uint32_t pvrtcDecompress(const uint8_t* pCompressedData, Pixel32* pDecomp
 			indices.S[1] = static_cast<int>(wrapWordIndex(i32NumYWords, wordY + 1));
 
 			// Work out the offsets into the twiddle structs, multiply by two as there are two members per word.
+			auto wordOffset = [&](int x, int y) {
+				return version2 ? uint32_t(y * i32NumXWords + x) : TwiddleUV(i32NumXWords, i32NumYWords, x, y);
+			};
 			uint32_t WordOffsets[4] = {
-				TwiddleUV(i32NumXWords, i32NumYWords, indices.P[0], indices.P[1]) * 2,
-				TwiddleUV(i32NumXWords, i32NumYWords, indices.Q[0], indices.Q[1]) * 2,
-				TwiddleUV(i32NumXWords, i32NumYWords, indices.R[0], indices.R[1]) * 2,
-				TwiddleUV(i32NumXWords, i32NumYWords, indices.S[0], indices.S[1]) * 2,
+				wordOffset(indices.P[0], indices.P[1]) * 2,
+				wordOffset(indices.Q[0], indices.Q[1]) * 2,
+				wordOffset(indices.R[0], indices.R[1]) * 2,
+				wordOffset(indices.S[0], indices.S[1]) * 2,
 			};
 
 			// Access individual elements to fill out PVRTCWord
@@ -522,7 +589,7 @@ static uint32_t pvrtcDecompress(const uint8_t* pCompressedData, Pixel32* pDecomp
 			S.modulationData = readLE32(pWordMembers + 4 * (WordOffsets[3]));
 
 			// assemble 4 words into struct to get decompressed pixels from
-			pvrtcGetDecompressedPixels(P, Q, R, S, pPixels, bpp);
+			pvrtcGetDecompressedPixels(P, Q, R, S, pPixels, bpp, version2);
 			mapDecompressedData(pOutData, width, pPixels, indices, bpp);
 
 		} // for each word
@@ -532,20 +599,21 @@ static uint32_t pvrtcDecompress(const uint8_t* pCompressedData, Pixel32* pDecomp
 	return width * height / static_cast<uint32_t>((wordWidth / 2));
 }
 
-static uint32_t PVRTDecompressPVRTC(const void* pCompressedData, uint32_t Do2bitMode, uint32_t XDim, uint32_t YDim, uint8_t* pResultImage)
+static uint32_t PVRTDecompressPVRTC(const void* pCompressedData, uint32_t Do2bitMode, uint32_t XDim, uint32_t YDim, uint8_t* pResultImage, bool version2)
 {
 	// Cast the output buffer to a Pixel32 pointer.
 	Pixel32* pDecompressedData = (Pixel32*)pResultImage;
 
 	// Check the X and Y values are at least the minimum size.
-	uint32_t XTrueDim = std::max(XDim, ((Do2bitMode == 1u) ? 16u : 8u));
-	uint32_t YTrueDim = std::max(YDim, 8u);
+	const uint32_t wordWidth = Do2bitMode ? 8u : 4u;
+	uint32_t XTrueDim = version2 ? ((XDim + wordWidth - 1) / wordWidth) * wordWidth : std::max(XDim, 2 * wordWidth);
+	uint32_t YTrueDim = version2 ? ((YDim + 3) / 4) * 4 : std::max(YDim, 8u);
 
 	// If the dimensions aren't correct, we need to create a new buffer instead of just using the provided one, as the buffer will overrun otherwise.
 	if (XTrueDim != XDim || YTrueDim != YDim) { pDecompressedData = new Pixel32[XTrueDim * YTrueDim]; }
 
 	// Decompress the surface.
-	uint32_t retval = pvrtcDecompress((const uint8_t*)pCompressedData, pDecompressedData, XTrueDim, YTrueDim, uint8_t(Do2bitMode == 1 ? 2 : 4));
+	uint32_t retval = pvrtcDecompress((const uint8_t*)pCompressedData, pDecompressedData, XTrueDim, YTrueDim, uint8_t(Do2bitMode == 1 ? 2 : 4), version2);
 
 	// If the dimensions were too small, then copy the new buffer back into the output buffer.
 	if (XTrueDim != XDim || YTrueDim != YDim)
