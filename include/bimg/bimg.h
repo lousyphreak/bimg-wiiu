@@ -508,6 +508,20 @@ namespace bimg
 		, uint32_t _dstPitch
 		);
 
+	/// Convert pixels with explicit byte pitches, including bit-packed R1 rows.
+	bool imageConvert(
+		  bx::AllocatorI* _allocator
+		, void* _dst
+		, TextureFormat::Enum _dstFormat
+		, const void* _src
+		, TextureFormat::Enum _srcFormat
+		, uint32_t _width
+		, uint32_t _height
+		, uint32_t _depth
+		, uint32_t _srcPitch
+		, uint32_t _dstPitch
+		);
+
 	///
 	bool imageConvert(
 		  bx::AllocatorI* _allocator
