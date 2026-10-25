@@ -6675,11 +6675,17 @@ namespace bimg
 		const uint32_t srcBpp = s_imageBlockInfo[_srcFormat].bitsPerPixel;
 #if BX_PLATFORM_WIIU
 		const uint32_t srcPitch = _srcFormat == TextureFormat::R1 ? (_width+7)/8 : _width*srcBpp/8;
+
+		const uint64_t srcSliceSize = isCompressed(_srcFormat)
+			? imageGetSize(NULL, _width, _height, 1, false, false, 1, _srcFormat)
+			: uint64_t(_height)*srcPitch;
+
+		for (uint32_t zz = 0; zz < _depth; ++zz, src += srcSliceSize, dst += _height*_dstPitch)
 #else
 		const uint32_t srcPitch = _width*srcBpp/8;
-#endif // BX_PLATFORM_WIIU
 
 		for (uint32_t zz = 0; zz < _depth; ++zz, src += _height*srcPitch, dst += _height*_dstPitch)
+#endif // BX_PLATFORM_WIIU
 		{
 			if (isCompressed(_srcFormat))
 			{
@@ -7477,11 +7483,17 @@ namespace bimg
 		const uint32_t srcBpp   = s_imageBlockInfo[_srcFormat].bitsPerPixel;
 #if BX_PLATFORM_WIIU
 		const uint32_t srcPitch = _srcFormat == TextureFormat::R1 ? (_width+7)/8 : _width*srcBpp/8;
+
+		const uint64_t srcSliceSize = isCompressed(_srcFormat)
+			? imageGetSize(NULL, _width, _height, 1, false, false, 1, _srcFormat)
+			: uint64_t(_height)*srcPitch;
+
+		for (uint32_t zz = 0; zz < _depth; ++zz, src += srcSliceSize, dst += _height*_dstPitch)
 #else
 		const uint32_t srcPitch = _width*srcBpp/8;
-#endif // BX_PLATFORM_WIIU
 
 		for (uint32_t zz = 0; zz < _depth; ++zz, src += _height*srcPitch, dst += _height*_dstPitch)
+#endif // BX_PLATFORM_WIIU
 		{
 			switch (_srcFormat)
 			{
