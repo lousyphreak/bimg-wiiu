@@ -133,6 +133,9 @@ BX_PRAGMA_DIAGNOSTIC_IGNORED_MSVC(4505); // unreferenced function with internal 
 #define STBI_FREE(_ptr)           ::free(_ptr)
 #define STB_IMAGE_IMPLEMENTATION
 #define STB_IMAGE_STATIC
+#if BX_PLATFORM_WIIU
+#define STBI_NO_FAILURE_STRINGS // Private stb failure strings are not consumed by bimg.
+#endif // BX_PLATFORM_WIIU
 #define STBI_NO_PNG // supported via LODEPNG
 
 #if !BIMG_CONFIG_PARSE_JPEG || BIMG_CONFIG_USE_WIC
